@@ -1,0 +1,9 @@
+[paths]
+data_dir = "/data"
+[serve]
+allowed_hosts = ["localhost", "127.0.0.1"]
+[llm]
+backends = ["none"]
+max_calls_per_run = 20
+[documents]
+cache_max_mb = 512

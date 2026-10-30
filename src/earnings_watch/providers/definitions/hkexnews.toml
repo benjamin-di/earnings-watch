@@ -1,0 +1,4 @@
+schema = 1
+hosts = ["www1.hkexnews.hk", "www.hkexnews.hk"]
+budget = 100
+pace_ms = 1000

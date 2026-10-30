@@ -1,0 +1,27 @@
+services:
+  server:
+    image: ghcr.io/benjamin-di/earnings-watch:0.1.0
+    build:
+      context: .
+      target: serve
+    ports: ["127.0.0.1:8787:8787"]
+    volumes: ["data:/data", "./earnings-watch.toml:/app/earnings-watch.toml:ro"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:mode=1777"]
+    restart: unless-stopped
+  worker:
+    image: ghcr.io/benjamin-di/earnings-watch-worker:0.1.0
+    build:
+      context: .
+      target: worker
+    volumes: ["data:/data", "./earnings-watch.toml:/app/earnings-watch.toml:ro", "cli-auth:/home/earnings"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:mode=1777"]
+    restart: unless-stopped
+volumes:
+  data:
+  cli-auth:

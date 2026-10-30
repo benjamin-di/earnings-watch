@@ -1,0 +1,11 @@
+sources:
+  - key: example-components
+    ticker: EXAMPLE
+    exchange: XNAS
+    issuer: Example Components
+    name: Example Components
+    calendar_url: https://issuer.example/calendar
+    results_url: https://issuer.example/results
+    fetch: plain
+    period_scheme: calendar-q
+    fy_end_month: 12

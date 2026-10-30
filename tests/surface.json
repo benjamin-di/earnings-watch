@@ -1,0 +1,526 @@
+{
+  "prompts": [
+    {
+      "arguments": [],
+      "description": "Summarize the coming week's verified earnings milestones.",
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "weekly_earnings_brief"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Provide a value matching the following JSON schema: {\"type\":\"string\"}. Encode non-string values as JSON.",
+          "name": "ticker",
+          "required": true
+        }
+      ],
+      "description": "Summarize results coverage from verified documents.",
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "results_brief"
+    },
+    {
+      "arguments": [],
+      "description": "Apply an optional earnings calendar plan through the external Outlook app.",
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "sync_to_my_outlook"
+    }
+  ],
+  "resources": [
+    {
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "mime_type": "text/calendar",
+      "name": "upcoming_ics",
+      "uri": "earnings://upcoming.ics"
+    }
+  ],
+  "tools": [
+    {
+      "annotations": {
+        "destructive_hint": false,
+        "idempotent_hint": true,
+        "open_world_hint": false,
+        "read_only_hint": true
+      },
+      "description": "R0. List upcoming verified dates, including explicit timing uncertainty.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "days": {
+            "default": 30,
+            "type": "integer"
+          },
+          "limit": {
+            "default": 100,
+            "type": "integer"
+          },
+          "scope": {
+            "default": "following",
+            "type": "string"
+          },
+          "tickers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "earnings_upcoming",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Earnings Upcoming"
+    },
+    {
+      "annotations": {
+        "destructive_hint": false,
+        "idempotent_hint": true,
+        "open_world_hint": false,
+        "read_only_hint": true
+      },
+      "description": "R0. Read up to 20 public events with evidence and bounded history.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "type": "object"
+      },
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "earnings_get_events",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Earnings Get Events"
+    },
+    {
+      "annotations": {
+        "destructive_hint": false,
+        "idempotent_hint": true,
+        "open_world_hint": false,
+        "read_only_hint": true
+      },
+      "description": "R0. List official result-document links and their verification status.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "event_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 100,
+            "type": "integer"
+          },
+          "roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "scope": {
+            "default": "following",
+            "type": "string"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tickers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "earnings_documents",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Earnings Documents"
+    },
+    {
+      "annotations": {
+        "destructive_hint": false,
+        "idempotent_hint": true,
+        "open_world_hint": false,
+        "read_only_hint": true
+      },
+      "description": "R0. Read the shared change feed; keep the returned cursor for next time.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 100,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "earnings_changes",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Earnings Changes"
+    },
+    {
+      "annotations": {
+        "destructive_hint": false,
+        "idempotent_hint": true,
+        "open_world_hint": false,
+        "read_only_hint": true
+      },
+      "description": "R0. Read your follows and pending registration states.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "earnings_watchlist",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Earnings Watchlist"
+    },
+    {
+      "annotations": {
+        "destructive_hint": false,
+        "idempotent_hint": true,
+        "open_world_hint": false,
+        "read_only_hint": false
+      },
+      "description": "R1. Follow an issuer for yourself; ambiguous tickers return candidates.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "isin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ticker": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker"
+        ],
+        "type": "object"
+      },
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "earnings_watch",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Earnings Watch"
+    },
+    {
+      "annotations": {
+        "destructive_hint": false,
+        "idempotent_hint": true,
+        "open_world_hint": false,
+        "read_only_hint": false
+      },
+      "description": "R1. Remove your manual follow; public history is retained.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ticker": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker"
+        ],
+        "type": "object"
+      },
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "earnings_unwatch",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Earnings Unwatch"
+    },
+    {
+      "annotations": {
+        "destructive_hint": false,
+        "idempotent_hint": true,
+        "open_world_hint": false,
+        "read_only_hint": true
+      },
+      "description": "R0. Plan optional Outlook operations. Apply through your external Outlook app.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "full": {
+            "default": false,
+            "type": "boolean"
+          },
+          "sink": {
+            "default": "delegated",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "earnings_calendar_plan",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Earnings Calendar Plan"
+    },
+    {
+      "annotations": {
+        "destructive_hint": false,
+        "idempotent_hint": true,
+        "open_world_hint": false,
+        "read_only_hint": false
+      },
+      "description": "R1. Record confirmed external operations; reject stale or altered plans.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "handle",
+          "results"
+        ],
+        "type": "object"
+      },
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "earnings_calendar_ack",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Earnings Calendar Ack"
+    },
+    {
+      "annotations": {
+        "destructive_hint": false,
+        "idempotent_hint": true,
+        "open_world_hint": false,
+        "read_only_hint": true
+      },
+      "description": "R0. Read catalogue counts and maintenance status without model calls.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "name": "earnings_status",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Earnings Status"
+    }
+  ]
+}

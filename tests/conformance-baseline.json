@@ -1,0 +1,11 @@
+{
+  "version": "0.1.16",
+  "scenarios": [
+    "server-initialize",
+    "ping",
+    "tools-list",
+    "resources-list",
+    "prompts-list",
+    "dns-rebinding-protection"
+  ]
+}

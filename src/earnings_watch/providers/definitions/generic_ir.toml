@@ -1,0 +1,4 @@
+schema = 1
+hosts = []
+budget = 200
+pace_ms = 1000
