@@ -8,7 +8,7 @@
           "tags": []
         }
       },
-      "name": "weekly_earnings_brief"
+      "name": "earnings_briefing"
     },
     {
       "arguments": [
@@ -434,6 +434,20 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "event_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "full": {
             "default": false,
             "type": "boolean"

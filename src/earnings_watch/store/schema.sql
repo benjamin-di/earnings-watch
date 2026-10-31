@@ -19,4 +19,7 @@ CREATE TABLE calendar_ledger (person TEXT NOT NULL REFERENCES people(id) ON DELE
 CREATE TABLE calendar_acks (person TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, handle_sha256 TEXT NOT NULL, doc TEXT NOT NULL, PRIMARY KEY(person,handle_sha256));
 CREATE TABLE deliveries (person TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, key TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL, message_id TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_attempt TEXT, sent_at TEXT, PRIMARY KEY(person,key));
 CREATE TABLE document_downloads (person TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, document_id TEXT NOT NULL, path TEXT NOT NULL, sha256 TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(person,document_id));
-PRAGMA user_version=2;
+CREATE TABLE profiles (person TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE, label TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0, settings TEXT NOT NULL DEFAULT '{"results":true,"brief":false,"urgent":false,"hour":8}', feed_nonce TEXT NOT NULL DEFAULT '', feed_sha256 TEXT UNIQUE, seen_seq INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE TABLE mutes (person TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, ticker TEXT NOT NULL, exchange TEXT NOT NULL DEFAULT '', PRIMARY KEY(person,ticker,exchange));
+CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+PRAGMA user_version=3;

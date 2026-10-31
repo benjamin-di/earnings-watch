@@ -61,9 +61,20 @@ A local client configuration, after initialization:
 | `earnings_calendar_ack` | Record confirmed operations from a signed plan |
 | `earnings_status` | Catalogue and maintenance status |
 
-Prompts: `weekly_earnings_brief`, `results_brief`, `sync_to_my_outlook`. Resource: `earnings://upcoming.ics`. Exact times require verified clock and timezone evidence; otherwise calendar entries are all-day. Outlook operations never include attendees.
+Prompts: `earnings_briefing`, `results_brief`, `sync_to_my_outlook`. Resource: `earnings://upcoming.ics`. Exact times require verified clock and timezone evidence; otherwise calendar entries are all-day. Outlook operations never include attendees.
 
-HTTP standalone mode uses a separate bearer token per person at `/users/<id>/mcp`. Gateway mode accepts a configured backend bearer and trusted person header at `/mcp`. These modes are separate trust boundaries; see [permissions](docs/PERMISSIONS.md).
+HTTP standalone mode uses a separate bearer token per person at `/users/<id>/mcp`. Gateway mode accepts a configured backend bearer and an immutable subject header from the admission gateway at `/mcp`. These modes are separate trust boundaries; see [permissions](docs/PERMISSIONS.md).
+
+## Connections page and notifications
+
+The optional [Connections page](docs/CONNECTIONS.md) provides Upcoming, Your
+companies, Notifications and Calendar in one place. Sign in, add companies or
+preview a holdings import, then subscribe to your private calendar feed. Facts
+are shared; holdings, watchlists, mutes, preferences and receipts are personal.
+
+Results-out notifications are enabled for new people. Daily briefs and urgent
+changes are optional. Mail submission requires a separately configured transport;
+the server and acquisition worker never send messages themselves.
 
 ## Docker Compose
 

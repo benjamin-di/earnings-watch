@@ -50,6 +50,10 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("notify")
     p.add_argument("--channel", choices=["stdout", "webhook"], default="stdout")
     p.add_argument("--url")
+    p.add_argument("--preview", action="store_true")
+    p.add_argument("--inspect", action="store_true")
+    p.add_argument("--resolve")
+    p.add_argument("--receipt", type=Path)
     p = sub.add_parser("overrides")
     p.add_argument("action", choices=["import", "set", "clear"])
     p.add_argument("value")
@@ -72,6 +76,7 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("calendar")
     p.add_argument("action", choices=["plan", "ack", "ics"])
     p.add_argument("--sink", default="delegated")
+    p.add_argument("--event-id", action="append")
     p.add_argument("--file", type=Path, help="JSON object containing handle and results")
     for name in ("backup", "restore"):
         p = sub.add_parser(name)
@@ -86,6 +91,8 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("import")
     p.add_argument("--legacy", type=Path, required=True)
     p.add_argument("--sink", default="legacy")
+    p = sub.add_parser("archive-effects")
+    p.add_argument("file", type=Path)
     p = sub.add_parser("reconcile-legacy")
     p.add_argument("file", type=Path, help="Externally reviewed JSON receipt")
     p = sub.add_parser("users")
@@ -191,6 +198,16 @@ def execute(args, settings):
         with connect(settings.db, write=True) as db:
             if args.action == "remove":
                 db.execute("DELETE FROM people WHERE id=?", (args.id,))
+                db.execute(
+                    "INSERT OR REPLACE INTO metadata VALUES(?,?)", ("blocked:" + args.id, "removed")
+                )
+                for prefix in ("email:", "baseline:", "brief-cutoff:"):
+                    db.execute("DELETE FROM metadata WHERE key=?", (prefix + args.id,))
+                for namespace in ("holdings:", "delivery-review:"):
+                    prefix = namespace + args.id + ":"
+                    db.execute(
+                        "DELETE FROM metadata WHERE substr(key,1,?)=?", (len(prefix), prefix)
+                    )
                 return {"state": "removed"}
             token = secrets.token_urlsafe(32)
             changed = db.execute(
@@ -247,6 +264,11 @@ def execute(args, settings):
         from .legacy import review
 
         return review(settings.db, args.person)
+    if command == "archive-effects":
+        from .store.accounts import archive_effects
+
+        with maintenance_lock(settings):
+            return archive_effects(settings.db, args.person, json.loads(args.file.read_text()))
     if command == "reconcile-legacy":
         from .legacy import reconcile
 
@@ -271,9 +293,11 @@ def execute(args, settings):
     if command == "serve":
         if args.http:
             import uvicorn
-            from .http_server import AuthenticatedApp
+            from .connections import create_app
 
-            uvicorn.run(AuthenticatedApp(settings, args.mode), host=args.host, port=args.port)
+            uvicorn.run(
+                create_app(settings, args.mode), host=args.host, port=args.port, access_log=False
+            )
         else:
             from .mcp_server import create, person_context
 
@@ -317,6 +341,36 @@ def execute(args, settings):
         from .outbox import deliver, Notifier
         from .transport import Transport
 
+        if args.inspect:
+            from .store.database import digest
+
+            with connect(settings.db) as db:
+                return {
+                    "deliveries": [
+                        dict(r)
+                        | {
+                            "person": args.person,
+                            "attempt": r["attempts"],
+                            "payload_sha256": digest(json.loads(r["payload"])),
+                        }
+                        for r in db.execute(
+                            "SELECT key,kind,state,payload,message_id,attempts FROM deliveries WHERE person=? AND state IN ('unknown','pending') ORDER BY key",
+                            (args.person,),
+                        )
+                    ]
+                }
+        if args.resolve:
+            if not args.receipt:
+                raise EarningsError("invalid_argument", "a private submission proof is required")
+            from .outbox import reconcile as reconcile_delivery
+
+            return reconcile_delivery(
+                settings.db, args.person, args.resolve, json.loads(args.receipt.read_text())
+            )
+        if args.preview:
+            from .notify import notices
+
+            return {"notices": notices(settings, args.person)}
         notifier: Notifier = StdoutNotifier()
         if args.channel == "webhook":
             if not args.url:
@@ -347,7 +401,7 @@ def execute(args, settings):
         if args.action == "ics":
             return service.calendar_ics()
         if args.action == "plan":
-            return service.calendar_plan(args.sink)
+            return service.calendar_plan(args.sink, event_ids=args.event_id)
         if not args.file:
             raise EarningsError("invalid_argument", "ack requires --file")
         body = json.loads(args.file.read_text())

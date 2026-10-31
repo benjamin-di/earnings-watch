@@ -18,7 +18,7 @@ from earnings_watch.model.events import Event
 from earnings_watch.model.sources import Source
 
 Row = dict[str, Any]
-SCHEMA = 2
+SCHEMA = 3
 
 
 def now() -> str:
@@ -76,6 +76,8 @@ def initialize(path: Path) -> None:
     try:
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(Path(__file__).with_name("schema.sql").read_text())
+        db.execute("INSERT INTO metadata VALUES('database_id',?)", (secrets.token_hex(16),))
+        db.commit()
     finally:
         db.close()
     secret = path.parent / "calendar.key"
@@ -106,6 +108,18 @@ def _upgrade(path: Path) -> None:
             db.execute("DROP TABLE document_downloads_v1")
             db.execute("CREATE INDEX event_revisions_event ON event_revisions(event_id,rev)")
             db.execute("PRAGMA user_version=2")
+            version = 2
+        if version == 2:
+            db.execute(
+                "CREATE TABLE profiles (person TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE, label TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0, settings TEXT NOT NULL DEFAULT '{}', feed_nonce TEXT NOT NULL DEFAULT '', feed_sha256 TEXT UNIQUE, seen_seq INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)"
+            )
+            db.execute(
+                "CREATE TABLE mutes (person TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, ticker TEXT NOT NULL, exchange TEXT NOT NULL DEFAULT '', PRIMARY KEY(person,ticker,exchange))"
+            )
+            db.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            db.execute("INSERT INTO profiles(person,created_at) SELECT id,? FROM people", (now(),))
+            db.execute("INSERT INTO metadata VALUES('database_id',?)", (secrets.token_hex(16),))
+            db.execute("PRAGMA user_version=3")
         elif version != SCHEMA:
             raise EarningsError("temporarily_unavailable", "unsupported database schema")
         db.commit()
@@ -214,10 +228,25 @@ class Catalogue(LibraryReader):
                 "INSERT INTO sources(key,ticker,exchange,doc) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET ticker=excluded.ticker,exchange=excluded.exchange,doc=excluded.doc",
                 (source.key, source.ticker, source.exchange or "", source.model_dump_json()),
             )
-            db.execute(
-                "UPDATE follows SET source_key=?,state='registered' WHERE ticker=? AND (exchange='' OR exchange=?) AND source_key IS NULL",
-                (source.key, source.ticker, source.exchange or ""),
-            )
+            pending = db.execute(
+                "SELECT id,person,origin FROM follows WHERE source_key IS NULL AND (ticker=? OR (? IS NOT NULL AND json_extract(hints,'$.isin')=?)) AND (exchange='' OR exchange=?)",
+                (source.ticker, source.isin, source.isin, source.exchange or ""),
+            ).fetchall()
+            for row in pending:
+                duplicate = db.execute(
+                    "SELECT id FROM follows WHERE person=? AND ticker=? AND exchange=? AND origin=? AND id!=?",
+                    (row["person"], source.ticker, source.exchange or "", row["origin"], row["id"]),
+                ).fetchone()
+                if duplicate:
+                    db.execute("DELETE FROM follows WHERE id=?", (row["id"],))
+                else:
+                    db.execute(
+                        "UPDATE follows SET source_key=?,ticker=?,exchange=?,state='registered' WHERE id=?",
+                        (source.key, source.ticker, source.exchange or "", row["id"]),
+                    )
+                db.execute(
+                    "UPDATE profiles SET revision=revision+1 WHERE person=?", (row["person"],)
+                )
 
     def commit_issuer(
         self,
@@ -394,9 +423,14 @@ def add_person(path: Path, person: str, *, token: str | None = None) -> None:
     if token is not None and len(token) < 32:
         raise EarningsError("invalid_argument", "tokens must contain at least 32 characters")
     with connect(path, write=True) as db:
+        db.execute("DELETE FROM metadata WHERE key=?", ("blocked:" + person,))
         db.execute(
             "INSERT INTO people(id,display_name,token_sha256) VALUES(?,?,?)",
             (person, person, hashlib.sha256(token.encode()).hexdigest() if token else None),
+        )
+        db.execute(
+            "INSERT INTO profiles(person,settings,created_at) VALUES(?,?,?)",
+            (person, '{"results":true,"brief":false,"urgent":false,"hour":8}', now()),
         )
 
 
@@ -439,6 +473,7 @@ class PersonalStore:
         origin: str = "manual",
         isin: str | None = None,
         name: str | None = None,
+        revision: int | None = None,
     ) -> Row:
         ticker = ticker.upper().strip()
         if isin and not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}[0-9]", isin):
@@ -448,14 +483,17 @@ class PersonalStore:
         ):
             raise EarningsError("invalid_argument", "invalid ticker or exchange")
         with connect(self.path, write=True) as db:
+            check_revision(db, self.person, revision)
             matches = list(
                 db.execute(
-                    "SELECT key,exchange FROM sources WHERE ticker=? AND (?='' OR exchange=?)",
-                    (ticker, exchange, exchange),
+                    "SELECT key,ticker,exchange FROM sources WHERE (ticker=? OR json_extract(doc,'$.isin')=?) AND (?='' OR exchange=?)",
+                    (ticker, isin or ticker, exchange, exchange),
                 )
             )
             if len(matches) > 1:
                 return {"state": "ambiguous", "candidates": [dict(row) for row in matches]}
+            if matches:
+                ticker, exchange = matches[0]["ticker"], matches[0]["exchange"]
             existing = db.execute(
                 "SELECT state FROM follows WHERE person=? AND ticker=? AND exchange=? AND origin=?",
                 (self.person, ticker, exchange, origin),
@@ -470,6 +508,14 @@ class PersonalStore:
             ):
                 raise EarningsError("over_cap", "follow limit reached")
             if not matches:
+                if (
+                    db.execute(
+                        "SELECT count(*) FROM follows WHERE person=? AND state='queued'",
+                        (self.person,),
+                    ).fetchone()[0]
+                    >= 5
+                ):
+                    raise EarningsError("over_cap", "five company requests are already pending")
                 quota = db.execute(
                     "SELECT used FROM registration_quotas WHERE person=? AND day=?",
                     (self.person, now()[:10]),
@@ -495,15 +541,27 @@ class PersonalStore:
                     now(),
                 ),
             )
+            db.execute("UPDATE profiles SET revision=revision+1 WHERE person=?", (self.person,))
             return {"state": state, "source_key": key}
 
-    def unwatch(self, ticker: str, exchange: str = "") -> Row:
+    def unwatch(self, ticker: str, exchange: str = "", *, revision: int | None = None) -> Row:
         with connect(self.path, write=True) as db:
+            check_revision(db, self.person, revision)
+            holding = db.execute(
+                "SELECT 1 FROM follows WHERE person=? AND ticker=? AND (?='' OR exchange=?) AND origin LIKE 'holdings:%'",
+                (self.person, ticker.upper(), exchange, exchange),
+            ).fetchone()
+            if holding:
+                db.execute(
+                    "INSERT OR IGNORE INTO mutes VALUES(?,?,?)",
+                    (self.person, ticker.upper(), exchange),
+                )
             db.execute(
                 "DELETE FROM follows WHERE person=? AND ticker=? AND (?='' OR exchange=?) AND origin='manual'",
                 (self.person, ticker.upper(), exchange, exchange),
             )
-        return {"state": "removed"}
+            db.execute("UPDATE profiles SET revision=revision+1 WHERE person=?", (self.person,))
+        return {"state": "muted" if holding else "removed"}
 
     def ledger(self, sink: str) -> tuple[int, list[Row]]:
         with connect(self.path) as db:
@@ -519,7 +577,7 @@ class PersonalStore:
             ]
             return row[0] if row else 0, entries
 
-    def calendar_snapshot(self, sink: str) -> Row:
+    def calendar_snapshot(self, sink: str, event_ids: list[str] | None = None) -> Row:
         with connect(self.path) as db:
             follows = [
                 dict(row)
@@ -528,11 +586,16 @@ class PersonalStore:
                     (self.person,),
                 )
             ]
-            keys = {row["source_key"] for row in follows}
+            selected = set(event_ids or []) | {
+                r[0].removeprefix("earnings-watch:")
+                for r in db.execute(
+                    "SELECT key FROM calendar_ledger WHERE person=? AND sink=?", (self.person, sink)
+                )
+            }
             events = [
                 json.loads(row["doc"]) | {"revision": row["rev"]}
                 for row in db.execute("SELECT doc,rev,source_key FROM events ORDER BY date,id")
-                if row["source_key"] in keys
+                if json.loads(row["doc"])["id"] in selected
             ]
             version = db.execute(
                 "SELECT rev FROM calendar_versions WHERE person=? AND sink=?", (self.person, sink)
@@ -635,6 +698,10 @@ def restore(path: Path, source: Path) -> None:
         destination = sqlite3.connect(path, timeout=5)
         try:
             origin.backup(destination)
+            destination.execute(
+                "UPDATE metadata SET value=? WHERE key='database_id'", (secrets.token_hex(16),)
+            )
+            destination.commit()
         finally:
             destination.close()
 
@@ -676,6 +743,11 @@ def sync_holdings(path: Path, person: str, feed: str, entries: list[Row]) -> Row
             "INSERT INTO follows(person,source_key,ticker,exchange,origin,state,added_at) VALUES(?,?,?,?,?,?,?)",
             prepared,
         )
+        db.execute("UPDATE profiles SET revision=revision+1 WHERE person=?", (person,))
+        db.execute(
+            "INSERT OR REPLACE INTO metadata VALUES(?,?)",
+            ("holdings:" + person + ":" + feed, now()),
+        )
     return {"feed": feed, "follows": len(prepared)}
 
 
@@ -688,3 +760,15 @@ def legacy_blocked(path: Path, person: str) -> bool:
                 (person,),
             ).fetchone()
         )
+
+
+def check_revision(db, person: str, revision: int | None) -> None:
+    if revision is not None:
+        row = db.execute("SELECT revision FROM profiles WHERE person=?", (person,)).fetchone()
+        if row is None or row[0] != revision:
+            raise EarningsError("conflict", "This page changed. Refresh before saving.")
+
+
+def database_id(path: Path) -> str:
+    with connect(path) as db:
+        return db.execute("SELECT value FROM metadata WHERE key='database_id'").fetchone()[0]

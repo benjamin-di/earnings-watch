@@ -95,7 +95,18 @@ _DISABLED = (
 
 
 def environment(backend: str) -> dict[str, str]:
-    names = {"HOME", "PATH", "LANG", "TMPDIR"}
+    names = {
+        "HOME",
+        "PATH",
+        "LANG",
+        "TMPDIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    }
     names |= (
         {
             "CLAUDE_CONFIG_DIR",

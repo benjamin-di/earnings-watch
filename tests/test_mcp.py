@@ -8,6 +8,9 @@ from earnings_watch.store.database import connect
 
 
 async def test_mcp_tools_prompts_resource_and_readonly_annotations(seeded):
+    from earnings_watch import open
+
+    open(seeded).watch("ALPHA")
     async with Client(create(seeded)) as client:
         tools = await client.list_tools()
         assert len(tools) == 10

@@ -456,14 +456,16 @@ wheels = [
 
 [[package]]
 name = "earnings-watch"
-version = "0.1.0"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "html2text" },
     { name = "httpx" },
     { name = "pydantic" },
+    { name = "python-multipart" },
     { name = "pyyaml" },
+    { name = "signin-window", extra = ["oidc"] },
     { name = "tzdata" },
 ]
 
@@ -484,7 +486,9 @@ requires-dist = [
     { name = "html2text", specifier = ">=2024.2" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "pydantic", specifier = ">=2.11,<3" },
+    { name = "python-multipart", specifier = ">=0.0.20,<1" },
     { name = "pyyaml", specifier = ">=6,<7" },
+    { name = "signin-window", extras = ["oidc"], specifier = "==0.4.17" },
     { name = "tzdata", specifier = ">=2024.1" },
 ]
 
@@ -1650,6 +1654,26 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/46/f5af3402b579fd5e11573ce652019a67074317e18c1935cc0b4ba9b35552/secretstorage-3.5.0-py3-none-any.whl", hash = "sha256:0ce65888c0725fcb2c5bc0fdb8e5438eece02c523557ea40ce0703c266248137", size = 15554, upload-time = "2025-11-23T19:02:51.545Z" },
+]
+
+[[package]]
+name = "signin-window"
+version = "0.4.17"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "starlette" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7e/57/cbb5a498521fbd0d72a057dfa80fc4d449060754fab574ca6284bb31d75d/signin_window-0.4.17.tar.gz", hash = "sha256:8be95e18f9ff2a4487332883785720d8e5ee219a7912116ad49ca05d6056d646", size = 266573, upload-time = "2026-10-30T16:48:37.817Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/aa/24/859b4accf31a343e6aa20e18afd6a5c84632840e577be467b1090f807a8a/signin_window-0.4.17-py3-none-any.whl", hash = "sha256:135f4c073409fc82c930f2703525aa0725f37ee90ff36f9d367e33d730259bf0", size = 128879, upload-time = "2026-10-30T16:48:36.742Z" },
+]
+
+[package.optional-dependencies]
+oidc = [
+    { name = "authlib" },
+    { name = "httpx2" },
 ]
 
 [[package]]

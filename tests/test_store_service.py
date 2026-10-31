@@ -19,14 +19,15 @@ def test_people_share_facts_but_not_follows_or_calendar(seeded):
     alice, bob = open(seeded, "alice"), open(seeded, "bob")
     assert alice.watch("ALPHA")["state"] == "registered"
     assert bob.watchlist() == {"follows": []}
-    assert alice.upcoming()["events"] == bob.upcoming()["events"]
-    plan = alice.calendar_plan()
+    assert alice.upcoming()["events"] and not bob.upcoming()["events"]
+    assert alice.get_events([event().id]) == bob.get_events([event().id])
+    plan = alice.calendar_plan(event_ids=[event().id])
     result = [
         {"key": op["key"], "status": "applied", "provider_id": "remote"}
         for op in plan["operations"]
     ]
     assert alice.calendar_ack(plan["handle"], result)["applied"]
-    assert not alice.calendar_plan()["operations"]
+    assert not alice.calendar_plan(event_ids=[event().id])["operations"]
     assert not bob.calendar_plan()["operations"]
     with pytest.raises(EarningsError, match="invalid or expired"):
         bob.calendar_ack(plan["handle"], result)
@@ -36,7 +37,7 @@ def test_people_share_facts_but_not_follows_or_calendar(seeded):
 
 def test_stale_tampered_and_unknown_calendar_operations(seeded):
     service = open(seeded, "alice")
-    plan = service.calendar_plan()
+    plan = service.calendar_plan(event_ids=[event().id])
     with pytest.raises(EarningsError):
         service.calendar_ack(plan["handle"] + "x", [])
     with pytest.raises(EarningsError, match="unknown or duplicate"):
@@ -51,12 +52,12 @@ def test_stale_tampered_and_unknown_calendar_operations(seeded):
 def test_rejected_calendar_write_is_not_recorded(seeded):
     service = open(seeded)
     service.watch("ALPHA")
-    plan = service.calendar_plan()
+    plan = service.calendar_plan(event_ids=[event().id])
     key = plan["operations"][0]["key"]
     assert service.calendar_ack(plan["handle"], [{"key": key, "status": "rejected"}])[
         "rejected"
     ] == [key]
-    assert service.calendar_plan()["operations"]
+    assert service.calendar_plan(event_ids=[event().id])["operations"]
 
 
 def test_backup_restore_and_wal_read_during_write(seeded, tmp_path):
@@ -167,7 +168,7 @@ def test_personal_writes_do_not_modify_catalogue(seeded):
 
 def test_calendar_plan_rejects_changed_follows(seeded):
     service = open(seeded)
-    plan = service.calendar_plan()
+    plan = service.calendar_plan(event_ids=[event().id])
     service.watch("OTHER")
     with pytest.raises(EarningsError, match="changed"):
         service.calendar_ack(plan["handle"], [])
@@ -183,10 +184,10 @@ def test_removing_queued_follow_cannot_reset_registration_budget(settings):
         service.watch("FOUR")
 
 
-def test_unwatching_last_issuer_plans_deletion_instead_of_following_everyone(seeded):
+def test_unwatching_last_issuer_preserves_personal_calendar_entries(seeded):
     service = open(seeded)
     service.watch("ALPHA")
-    plan = service.calendar_plan()
+    plan = service.calendar_plan(event_ids=[event().id])
     service.calendar_ack(
         plan["handle"],
         [
@@ -195,6 +196,7 @@ def test_unwatching_last_issuer_plans_deletion_instead_of_following_everyone(see
         ],
     )
     service.unwatch("ALPHA")
-    ops = service.calendar_plan()["operations"]
-    assert len(ops) == 1 and ops[0]["action"] == "delete"
+    ops = service.calendar_plan(event_ids=[event().id])["operations"]
+    assert ops == []
+    assert service.person.ledger("delegated")[1][0]["provider_id"] == "external"
     assert "DTSTART" not in service.calendar_ics()

@@ -147,7 +147,7 @@ def test_schema_one_upgrade_preserves_receipts_key_and_supports_retirement(seede
     assert key.read_bytes() == b"original-signing-key"
     Catalogue(path).commit_issuer("alpha", [], run_id="retire", authoritative=True)
     with connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
         assert tuple(db.execute("SELECT * FROM document_downloads").fetchone()) == (
             "alice",
             doc["id"],
@@ -177,7 +177,7 @@ async def test_disabled_models_do_not_fetch_calendar_or_reserve_registrations(se
     assert service.watchlist()["follows"][1]["state"] == "queued"
 
 
-def test_queries_and_reminders_use_utc_in_a_different_host_timezone(seeded, monkeypatch):
+def test_queries_and_briefs_use_explicit_timezone_in_a_different_host_timezone(seeded, monkeypatch):
     zone = "Pacific/Kiritimati" if datetime.now(timezone.utc).hour >= 10 else "Etc/GMT+12"
     monkeypatch.setenv("TZ", zone)
     time.tzset()
@@ -188,10 +188,20 @@ def test_queries_and_reminders_use_utc_in_a_different_host_timezone(seeded, monk
         service = open(seeded)
         service.watch("ALPHA")
         assert service.upcoming()["events"][0]["date"] == str(today)
+        from earnings_watch.store.accounts import preferences, profile
+
+        pref = profile(seeded.db, "local")
+        preferences(
+            seeded.db,
+            "local",
+            pref["revision"],
+            dict(results=True, brief=True, urgent=False, hour=0),
+            "UTC",
+        )
         prepare(seeded)
         with connect(seeded.db) as db:
-            reminder = db.execute("SELECT payload FROM deliveries WHERE kind='reminder'").fetchone()
-            assert json.loads(reminder[0])["date"] == str(today)
+            reminder = db.execute("SELECT payload FROM deliveries WHERE kind='brief'").fetchone()
+            assert json.loads(reminder[0])["events"][0]["date"] == str(today)
     finally:
         monkeypatch.undo()
         time.tzset()

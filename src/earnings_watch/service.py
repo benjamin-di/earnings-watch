@@ -8,7 +8,8 @@ from typing import Any
 
 from . import calendar, ics
 from .errors import EarningsError
-from .store.database import LibraryReader, PersonalStore
+from .store.database import LibraryReader, PersonalStore, database_id
+from .store.accounts import effective_follows
 
 
 class PersonService:
@@ -18,13 +19,9 @@ class PersonService:
     def _events(self, scope: str = "following") -> list[dict[str, Any]]:
         if scope not in {"following", "all"}:
             raise EarningsError("invalid_argument", "scope must be following or all")
-        follows = self.person.follows()
+        follows = effective_follows(self.person.path, self.person.person)
         keys = {row["source_key"] for row in follows}
-        return [
-            row
-            for row in self.library.events()
-            if scope == "all" or not follows or row["issuer_key"] in keys
-        ]
+        return [row for row in self.library.events() if scope == "all" or row["issuer_key"] in keys]
 
     def upcoming(
         self,
@@ -45,23 +42,27 @@ class PersonService:
             and (not tickers or row["ticker"] in tickers)
             and (not types or row["type"] in types)
         ]
+        identity = database_id(self.person.path)
         # Stable keyset paging. Catalogue changes remain available via changes().
         if cursor:
             try:
-                after = base64.urlsafe_b64decode(cursor).decode().split("|", 1)
-                if len(after) != 2:
+                parts = base64.urlsafe_b64decode(cursor).decode().split("|", 2)
+                if len(parts) != 3 or parts[0] != identity:
                     raise ValueError()
             except (ValueError, UnicodeError):
                 raise EarningsError("invalid_argument", "invalid cursor") from None
-            rows = [row for row in rows if (row["date"], row["id"]) > tuple(after)]
+            rows = [row for row in rows if (row["date"], row["id"]) > tuple(parts[1:])]
         selected = rows[:limit]
         next_cursor = (
             base64.urlsafe_b64encode(
-                (selected[-1]["date"] + "|" + selected[-1]["id"]).encode()
+                (identity + "|" + selected[-1]["date"] + "|" + selected[-1]["id"]).encode()
             ).decode()
             if len(rows) > limit
             else None
         )
+        from .presentation import present
+
+        selected = [present(e, self.person, self.library) for e in selected]
         # The compact view stays within the MCP response budget.
         fields = {
             "id",
@@ -76,10 +77,16 @@ class PersonService:
             "status",
             "source_url",
             "revision",
+            "title",
+            "when",
+            "certainty",
+            "documents",
+            "why_followed",
         }
         return {
             "events": [{k: v for k, v in row.items() if k in fields} for row in selected],
             "cursor": next_cursor,
+            **self._freshness(),
         }
 
     def get_events(self, ids: list[str]) -> dict[str, Any]:
@@ -115,17 +122,31 @@ class PersonService:
             and (not roles or row["role"] in roles)
             and (not since or row["first_seen"] >= since)
         ]
-        return {"documents": docs[:limit], "truncated": len(docs) > limit}
+        return {"documents": docs[:limit], "truncated": len(docs) > limit, **self._freshness()}
 
-    def changes(self, cursor: str | None = None, limit: int = 100) -> dict[str, Any]:
+    def changes(
+        self, cursor: str | None = None, limit: int = 100, *, after_seq: int = 0
+    ) -> dict[str, Any]:
         try:
-            seq = int(cursor or "0")
+            identity = database_id(self.person.path)
+            if cursor:
+                prefix, number = cursor.split(":", 1)
+                if prefix != identity:
+                    raise ValueError()
+                seq = int(number)
+            else:
+                seq = after_seq
         except ValueError:
             raise EarningsError("invalid_argument", "invalid change cursor") from None
         if seq < 0 or not 1 <= limit <= 100:
             raise EarningsError("invalid_argument", "invalid change query")
         rows = self.library.changes(seq, limit)
-        return {"changes": rows, "cursor": str(rows[-1]["seq"] if rows else seq)}
+        keys = {r["source_key"] for r in effective_follows(self.person.path, self.person.person)}
+        return {
+            "changes": [r for r in rows if r["doc"].get("issuer_key") in keys],
+            "cursor": identity + ":" + str(rows[-1]["seq"] if rows else seq),
+            **self._freshness(),
+        }
 
     def watchlist(self) -> dict[str, Any]:
         return {"follows": self.person.follows()}
@@ -142,19 +163,32 @@ class PersonService:
     def unwatch(self, ticker: str, exchange: str | None = None) -> dict[str, Any]:
         return self.person.unwatch(ticker, exchange or "")
 
-    def calendar_plan(self, sink: str = "delegated", full: bool = False) -> dict[str, Any]:
+    def calendar_plan(
+        self, sink: str = "delegated", full: bool = False, event_ids: list[str] | None = None
+    ) -> dict[str, Any]:
         return calendar.plan(
             self.person,
             key=self.signing_key,
             sink=sink,
             full=full,
+            event_ids=event_ids,
         )
 
     def calendar_ack(self, handle: str, results: list[dict[str, Any]]) -> dict[str, Any]:
         return calendar.ack(self.person, handle, results, key=self.signing_key)
 
     def calendar_ics(self) -> str:
-        return ics.render(self.person.calendar_snapshot("delegated")["events"])
+        return ics.render(self._events())
 
     def status(self) -> dict[str, Any]:
-        return self.library.status()
+        return self.library.status() | self._freshness()
+
+    def _freshness(self) -> dict[str, Any]:
+        status = self.library.status()
+        last = status.get("last_sweep") or {}
+        result: dict[str, Any] = {"as_of": last.get("ended")}
+        if not last or last.get("exit") != 0:
+            result["coverage_note"] = (
+                "Some company information has not been checked successfully. Sources and certainty are shown for each event."
+            )
+        return result

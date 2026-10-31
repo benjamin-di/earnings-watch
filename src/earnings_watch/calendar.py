@@ -38,7 +38,7 @@ def desired(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             start = datetime.fromisoformat(day + "T" + event["release_time"]).replace(
                 tzinfo=ZoneInfo(event["release_tz"])
             )
-            entry.update(start=start.isoformat(), end=(start + timedelta(minutes=30)).isoformat())
+            entry.update(start=start.isoformat(), end=start.isoformat())
         else:
             entry.update(
                 start=day, end=(datetime.fromisoformat(day) + timedelta(days=1)).date().isoformat()
@@ -55,12 +55,17 @@ def plan(
     key: bytes,
     sink: str = "delegated",
     full: bool = False,
+    event_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     if legacy_blocked(person.path, person.person):
         raise EarningsError("temporarily_unavailable", "legacy calendar reconciliation required")
     if not sink or len(sink) > 64:
         raise EarningsError("invalid_argument", "invalid calendar sink")
-    snapshot = person.calendar_snapshot(sink)
+    if event_ids is not None and (
+        not 1 <= len(event_ids) <= 20 or len(set(event_ids)) != len(event_ids)
+    ):
+        raise EarningsError("invalid_argument", "select 1 to 20 distinct event ids")
+    snapshot = person.calendar_snapshot(sink, event_ids=event_ids)
     rev, ledger = snapshot["ledger_rev"], snapshot["ledger"]
     previous = {row["key"]: row for row in ledger}
     entries = {row["key"]: row for row in desired(snapshot["events"])}
@@ -75,14 +80,8 @@ def plan(
                     "provider_id": old["provider_id"] if old else None,
                 }
             )
-    for identifier in previous.keys() - entries.keys():
-        ops.append(
-            {
-                "action": "delete",
-                "key": identifier,
-                "provider_id": previous[identifier]["provider_id"],
-            }
-        )
+    # Unfollowing never deletes personal entries. Deletion remains an explicit
+    # action in the external calendar app, rather than a bulk synchronization side effect.
     if len(ops) > 100:
         raise EarningsError("over_cap", "calendar plan exceeds 100 operations")
     payload = {

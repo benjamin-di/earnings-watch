@@ -1,13 +1,58 @@
 # Permissions and trust
 
-Local stdio and CLI are trusted, single-operator interfaces. The operator selects a person with `--person`; do not expose these commands as an unauthenticated remote shell. Database files, backups and `calendar.key` must remain private. The key signs calendar receipts and must be backed up with state.
+The CLI and stdio are trusted local operator interfaces. `--person` selects a
+record only here. Keep the database, backups, browser sessions and `calendar.key`
+private; restore the signing key with state. Restore changes the database ID,
+invalidating old pagination and change cursors.
 
-Standalone HTTP authenticates a bearer token against the person encoded in `/users/<id>/mcp`. Tokens have at least 32 characters and are stored as SHA256 hashes. Rotation invalidates the previous token. An identity header has no authority in this mode.
+Company facts, events, evidence and documents form one shared catalogue. Follows,
+holdings, mutes, preferences, feed tokens, downloads, calendar ledgers and delivery
+receipts belong to one person. Shared facts expose no follower lists. Acquisition
+covers the union of followed companies within the shared maintenance budget.
 
-Gateway HTTP accepts `/mcp` only with a configured backend bearer and `X-Fleet-Person` naming an existing person. Put this mode behind an admission gateway that validates the human identity and sets the header. Never expose the backend bearer to clients or trust a caller-supplied person header at public ingress. An operator who holds the backend bearer can select any person.
+Standalone HTTP hashes a personal token and accepts it only at
+`/users/<id>/mcp`. An identity header has no authority there. Use `users rotate`
+to revoke a token and `users remove` to forget a record and its private state.
 
-Allowed HTTP Hosts are explicit. Browser Origins must match the request authority. Requests over 256 KiB and tool responses over 128 KiB are refused. No cookies, OAuth issuer or Microsoft account authorization is built in. Use TLS at the reverse proxy for remote connections.
+Hosted gateway HTTP requires the backend bearer plus `X-Fleet-Subject` from the
+admission gateway. With an identity directory configured, it checks admission
+before provisioning the immutable subject. `X-Fleet-Person` is only a display
+label. Set `directory_required=true` to refuse the legacy, pre-created-person
+fallback. Never give the backend key to a browser or public MCP client.
 
-Read tools are R0. Following/unfollowing and acknowledging calendar writes are R1, idempotent personal mutations. Calendar acknowledgement is exempt from a second confirmation because it records operations already confirmed by the external app; it does not perform calendar writes. Publication and live account effects remain the operator's responsibility.
+The optional Connections page uses public PKCE OIDC via signin-window. Configure
+an explicit issuer, client, origin and allowed group. An optional independent
+directory key resolves only an exact subject and current admission/email; it is
+never a provider administrator key. Hosted deployment requires this directory.
+Without it, the page uses the latest verified sign-in email. Disabling or removing
+a standalone account is an operator responsibility.
 
-Issuer pages and model output are untrusted. The network boundary permits HTTPS on port 443, checks every resolved address and redirect, and pins the connection IP. Registration and research are budgeted. Model runners remove ambient MCP/project tools and inherited unrelated environment variables. A shared catalogue exposes public issuer interest indirectly; it is not an interest-confidential service.
+Each browser form checks the exact Origin and current record revision. Holdings
+imports require a signed, person-bound preview and atomic revision check. They
+store company identities only, discarding quantities and financial values. Mutes
+survive holdings refreshes. Registration has daily and five-pending person caps.
+
+Calendar subscriptions use random bearer URLs stored by hash. Resetting a link
+revokes its predecessor. With the directory enabled, group removal or disabled
+accounts refuse feeds; a directory outage returns 503. Directory admission is
+cached for at most one minute and mail preflight always uses a fresh lookup.
+Disable access logging for feed paths at the server and proxy. Keep feeds private.
+
+Calendar plan/ack records only selected events or previously delegated entries.
+It performs no Outlook write and owns no calendar credential. Unfollowing never
+deletes a personal calendar entry. Calendar feeds remove unfollowed events on the
+calendar application's next refresh; refresh timing belongs to that application.
+
+New people receive results-out notifications; daily briefs and urgent changes are
+off until enabled. Queued notifications honor current preferences and follows.
+Submission starts with a durable unknown state; timeouts never cause automatic
+replay. `notify --inspect` exposes pending/unknown submissions to the operator.
+`notify --resolve KEY --receipt FILE` requires proof bound to the person, key, current attempt and payload hash,
+with outcome `submitted` (and message receipt) or `not_submitted`. A submission
+receipt establishes transport acceptance, not arrival in a recipient's inbox.
+
+Issuer pages and model output are untrusted. HTTP acquisition pins validated public
+HTTPS addresses and checks redirects. Model runners remove unrelated environment,
+project tools and ambient MCP. Serving never acquires issuer data or invokes a
+model. Host allowlists, body and response budgets apply to remote reads. Use TLS
+and a separate credential boundary for every hosted service role.

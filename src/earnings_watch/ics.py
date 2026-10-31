@@ -23,6 +23,7 @@ def render(events: list[dict[str, Any]]) -> str:
                 "UID:" + entry["key"],
                 "SEQUENCE:" + str(entry["revision"]),
                 "DTSTAMP:" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+                "TRANSP:TRANSPARENT",
                 "SUMMARY:" + escape(entry["title"]),
                 "DESCRIPTION:" + escape(entry["body"]),
             ]

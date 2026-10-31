@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "earnings-watch"
-version = "0.1.0"
+version = "0.2.1"
 description = "Verified issuer earnings calendars and results documents, through CLI and MCP"
 requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
 authors = [{name = "benjamin-di"}]
-dependencies = ["pydantic>=2.11,<3", "httpx>=0.28,<1", "fastmcp==4.1.3", "pyyaml>=6,<7", "html2text>=2024.2", "tzdata>=2024.1"]
+dependencies = ["pydantic>=2.11,<3", "httpx>=0.28,<1", "fastmcp==4.1.3", "pyyaml>=6,<7", "html2text>=2024.2", "tzdata>=2024.1", "signin-window[oidc]==0.4.17", "python-multipart>=0.0.20,<1"]
 
 [project.scripts]
 earnings-watch = "earnings_watch.cli:main"

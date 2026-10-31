@@ -79,6 +79,9 @@ async def test_committed_mcp_surface_matches_runtime(settings):
 
 
 async def test_real_stdio_wire_uses_the_same_bounded_service(seeded):
+    from earnings_watch import open
+
+    open(seeded).watch("ALPHA")
     transport = StdioTransport(
         command=sys.executable,
         args=["-m", "earnings_watch.cli", "serve", "--stdio"],
@@ -135,3 +138,18 @@ def test_model_schema_closes_nested_objects_and_keeps_metadata_out():
         visit(schema)
     assert "extensions" not in structured_schema(Source)["properties"]
     assert "coverage" not in structured_schema(ExtractResult)["properties"]
+
+
+def test_model_environment_keeps_proxy_route_without_service_secrets(monkeypatch):
+    from earnings_watch.llm.runner import environment
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
+    monkeypatch.setenv("EARNINGS_DIRECTORY_API_KEY", "private-directory")
+    monkeypatch.setenv("EARNINGS_MAIL_TOKEN", "private-mail")
+    for backend in ("claude-code", "codex"):
+        value = environment(backend)
+        assert value["HTTPS_PROXY"] == "http://proxy.example:3128"
+        assert value["NO_PROXY"] == "localhost,127.0.0.1"
+        assert "EARNINGS_DIRECTORY_API_KEY" not in value
+        assert "EARNINGS_MAIL_TOKEN" not in value

@@ -19,6 +19,15 @@ class Settings(BaseModel):
     max_calls_per_run: int = Field(default=20, ge=0, le=200)
     allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "[::1]"])
     backend_tokens_env: list[str] = Field(default_factory=list)
+    public_url: str = ""
+    oidc_issuer: str = ""
+    oidc_client_id: str = "earnings-connections"
+    oidc_required_group: str = ""
+    directory_url: str = ""
+    directory_key_env: str = "EARNINGS_DIRECTORY_API_KEY"
+    directory_required: bool = False
+    mail_url: str = ""
+    mail_token_env: str = "EARNINGS_MAIL_TOKEN"
     sec_contact: str = ""
     downloads_root: Path | None = None
     cache_max_mb: int = Field(default=512, ge=1)
@@ -47,6 +56,8 @@ def load(path: Path | None = None) -> Settings:
     values.update(raw.get("serve", {}))
     values.update(raw.get("documents", {}))
     values.update(raw.get("llm", {}))
+    values.update(raw.get("connections", {}))
+    values.update(raw.get("notifications", {}))
     values["sec_contact"] = raw.get("providers", {}).get("sec_edgar", {}).get("contact", "")
     for key in Settings.model_fields:
         env = os.environ.get("EARNINGS_WATCH_" + key.upper())

@@ -117,9 +117,11 @@ def create(settings: Settings) -> FastMCP:
 
     @server.tool(annotations=read)
     @envelope
-    def earnings_calendar_plan(sink: str = "delegated", full: bool = False) -> dict[str, Any]:
+    def earnings_calendar_plan(
+        sink: str = "delegated", full: bool = False, event_ids: list[str] | None = None
+    ) -> dict[str, Any]:
         """R0. Plan optional Outlook operations. Apply through your external Outlook app."""
-        return service().calendar_plan(sink, full)
+        return service().calendar_plan(sink, full, event_ids)
 
     @server.tool(annotations=write)
     @envelope
@@ -131,14 +133,18 @@ def create(settings: Settings) -> FastMCP:
     @envelope
     def earnings_status() -> dict[str, Any]:
         """R0. Read catalogue counts and maintenance status without model calls."""
-        return service().status()
+        return service().status() | {
+            "settings_url": settings.public_url.rstrip("/") + "/connections/"
+            if settings.public_url
+            else None
+        }
 
     @server.resource("earnings://upcoming.ics", mime_type="text/calendar")
     def upcoming_ics() -> str:
         return service().calendar_ics()
 
     @server.prompt
-    def weekly_earnings_brief() -> str:
+    def earnings_briefing() -> str:
         """Summarize the coming week's verified earnings milestones."""
         return "Use earnings_upcoming(days=7). Explain timing uncertainty and cite source URLs."
 
@@ -150,6 +156,6 @@ def create(settings: Settings) -> FastMCP:
     @server.prompt
     def sync_to_my_outlook() -> str:
         """Apply an optional earnings calendar plan through the external Outlook app."""
-        return "Get earnings_calendar_plan. Use the external Outlook app to apply only those operations, with no attendees. Read back writes and acknowledge only confirmed operations with earnings_calendar_ack. Stop on errors; request a fresh plan if stale. This is optional: do nothing if calendar updates were not requested."
+        return "Get earnings_calendar_plan with the requested event_ids only. Use the external Outlook app to apply only those operations, with no attendees. Read back writes and acknowledge only confirmed operations with earnings_calendar_ack. Stop on errors; request a fresh plan if stale. This is optional: do nothing if calendar updates were not requested."
 
     return server

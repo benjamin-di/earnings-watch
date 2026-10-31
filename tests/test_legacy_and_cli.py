@@ -85,6 +85,9 @@ def test_cli_init_doctor_export_and_json_anywhere(tmp_path, monkeypatch, capsys)
 
 
 def test_cli_upcoming_table_and_explicit_json(seeded, monkeypatch, capsys):
+    from earnings_watch import open
+
+    open(seeded).watch("ALPHA")
     monkeypatch.setenv("EARNINGS_WATCH_DATA_DIR", str(seeded.data_dir))
     assert main(["upcoming"]) == 0
     table = capsys.readouterr().out
@@ -101,13 +104,23 @@ def test_notifications_only_project_followed_issuers(seeded):
     prepare(seeded)
     with connect(seeded.db) as db:
         assert db.execute("SELECT count(*) FROM deliveries").fetchone()[0] == 0
-        assert all(r[0] > 0 for r in db.execute("SELECT notify_seq FROM people"))
+        assert all(r[0] == 0 for r in db.execute("SELECT notify_seq FROM people"))
     open(seeded, "alice").watch("ALPHA")
+    from earnings_watch.store.accounts import preferences, profile
+
+    pref = profile(seeded.db, "alice")
+    preferences(
+        seeded.db,
+        "alice",
+        pref["revision"],
+        dict(results=True, brief=True, urgent=False, hour=0),
+        "UTC",
+    )
     prepare(seeded)
     with connect(seeded.db) as db:
         rows = list(db.execute("SELECT person,kind FROM deliveries"))
     assert rows and {r[0] for r in rows} == {"alice"}
-    assert "reminder" in {r[1] for r in rows}
+    assert "brief" in {r[1] for r in rows}
 
 
 def test_migration_freezes_external_effects_and_advances_cursor(settings, tmp_path):

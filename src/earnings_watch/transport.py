@@ -222,3 +222,65 @@ class Transport:
                                 response.status_code,
                             )
                 raise ValueError("redirect limit exceeded")
+
+
+class IdentityDirectory:
+    """Finite identity-owner boundary; never contacts issuer pages or takes caller URLs."""
+
+    def __init__(self, url: str, key: str, *, transport=None):
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(url)
+        if (
+            parts.scheme != "https"
+            or not parts.hostname
+            or parts.username
+            or parts.password
+            or parts.query
+            or parts.fragment
+        ):
+            raise ValueError("directory requires a fixed HTTPS endpoint")
+        if len(key) < 32:
+            raise ValueError("directory key is missing")
+        self.url, self.key, self.transport = url.rstrip("/"), key, transport
+        self.cache: dict[str, tuple[float, dict]] = {}
+
+    async def resolve(self, subject: str, *, fresh: bool = False) -> dict:
+        import re
+        from urllib.parse import quote
+
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,199}", subject):
+            raise ValueError("invalid subject")
+        cached = self.cache.get(subject)
+        if not fresh and cached and cached[0] > time.monotonic():
+            return dict(cached[1])
+        async with httpx.AsyncClient(
+            timeout=10, follow_redirects=False, transport=self.transport, trust_env=False
+        ) as client:
+            async with client.stream(
+                "GET",
+                self.url + "/users/" + quote(subject, safe=""),
+                headers={"X-API-Key": self.key},
+            ) as response:
+                if response.status_code == 404:
+                    return {"id": subject, "admitted": False, "disabled": True, "email": ""}
+                response.raise_for_status()
+                data = bytearray()
+                async for chunk in response.aiter_bytes():
+                    data.extend(chunk)
+                    if len(data) > 8192:
+                        raise ValueError("directory response too large")
+        import json
+
+        body = json.loads(data)
+        if (
+            body.get("id") != subject
+            or type(body.get("admitted")) is not bool
+            or type(body.get("disabled")) is not bool
+            or not isinstance(body.get("email"), str)
+        ):
+            raise ValueError("directory response is invalid")
+        if len(self.cache) >= 1024:
+            self.cache.clear()
+        self.cache[subject] = (time.monotonic() + 60, dict(body))
+        return body
