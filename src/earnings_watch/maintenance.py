@@ -49,7 +49,7 @@ class Maintenance:
     ):
         self.settings = settings
         self.catalogue = Catalogue(settings.db)
-        self.runner = runner or CliRunner(settings.backends)
+        self.runner = runner or CliRunner(settings.backends, settings.codex_endpoint)
         self.transport = transport
         self.browser = browser
 

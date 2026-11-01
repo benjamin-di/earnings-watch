@@ -106,15 +106,19 @@ def normalize_whitespace(value: str) -> str:
     return " ".join(value.split())
 
 
-def dates_in_evidence(evidence: str) -> set[date]:
-    found: set[date] = set()
+def _normalized_date_text(evidence: str) -> str:
     normalized = _ORDINAL_DAY_RE.sub("\\1", normalize_whitespace(evidence))
-    normalized = re.sub(
+    return re.sub(
         "\\b(Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\\.(?=\\s)",
         "\\1",
         normalized,
         flags=re.I,
     )
+
+
+def dates_in_evidence(evidence: str) -> set[date]:
+    found: set[date] = set()
+    normalized = _normalized_date_text(evidence)
     for pattern, date_format in _DATE_PATTERNS:
         for match in pattern.finditer(normalized):
             raw = re.sub("\\bSept\\b", "Sep", match.group(1), flags=re.I)
@@ -152,8 +156,39 @@ def evidence_verifies(event_date: date, evidence: str, page_text: str) -> bool:
     return _yearless_dates_match(event_date, normalized_evidence)
 
 
+def evidence_has_full_date(event_date: date, evidence: str) -> bool:
+    """Whether the quote states the claimed date including its year."""
+    return event_date in dates_in_evidence(evidence)
+
+
+def period_date_plausible(period: str, event_date: date, fy_end_month: int) -> bool:
+    """A yearless quoted date fixes only day and month; bind it to the period's window.
+
+    Results are published from shortly before a period ends until within a year
+    after it, so the next occurrence of the same day and month is rejected.
+    """
+    match = re.fullmatch("(20\\d{2})(FQ|Q|H)([1-4])", period)
+    if match is None:
+        return True
+    year, kind, number = int(match.group(1)), match.group(2), int(match.group(3))
+    ends = []
+    if kind == "Q":
+        ends.append((year, 3 * number))
+    if kind != "Q" or fy_end_month != 12:
+        # Fiscal labels, including Q labels of a non-December fiscal year.
+        back = 12 - (6 * number if kind == "H" else 3 * number)
+        end_year, end_month = divmod(year * 12 + fy_end_month - 1 - back, 12)
+        ends.append((end_year, end_month + 1))
+    for end_year, end_month in ends:
+        following = date(end_year + end_month // 12, end_month % 12 + 1, 1)
+        period_end = following - timedelta(days=1)
+        if period_end - timedelta(days=92) <= event_date <= period_end + timedelta(days=365):
+            return True
+    return False
+
+
 def _yearless_dates_match(event_date: date, evidence: str) -> bool:
-    normalized = _ORDINAL_DAY_RE.sub("\\1", normalize_whitespace(evidence))
+    normalized = _normalized_date_text(evidence)
     for pattern in _YEARLESS_DATE_RES:
         for match in pattern.finditer(normalized):
             day = int(match.group("day"))
@@ -163,9 +198,21 @@ def _yearless_dates_match(event_date: date, evidence: str) -> bool:
     return False
 
 
+def _dotted_date(text: str, match: re.Match[str]) -> bool:
+    """A dotted HH.MM that is really part of a dd.mm[.yyyy] date."""
+    start, end = match.start(1), match.end(2)
+    return bool(
+        re.search("\\d\\.$", text[max(0, start - 2) : start])
+        or re.match("\\.\\d|\\.\\s\\d", text[end : end + 3])
+    )
+
+
 def _time_matches(evidence: str) -> list[tuple[tuple[int, int], tuple[int, int]]]:
     found: list[tuple[tuple[int, int], tuple[int, int]]] = []
-    for match in _EVIDENCE_TIME_RE.finditer(normalize_whitespace(evidence)):
+    text = normalize_whitespace(evidence)
+    for match in _EVIDENCE_TIME_RE.finditer(text):
+        if match.group(1) is not None and text[match.end(1)] == "." and _dotted_date(text, match):
+            continue
         if match.group(1) is not None:
             hour = int(match.group(1))
             minute = int(match.group(2))
@@ -504,6 +551,16 @@ def verify_claims(
             period = canonical_period(claim.period, source, claim.type, claim.date)
         except ValueError as exc:
             rejected.append(RejectedClaim(claim=claim, reason=str(exc)))
+            continue
+        if not evidence_has_full_date(claim.date, claim.evidence) and not period_date_plausible(
+            period, claim.date, source.fy_end_month
+        ):
+            rejected.append(
+                RejectedClaim(
+                    claim=claim,
+                    reason="a quoted date without a year must fall in its period's publication window",
+                )
+            )
             continue
         identifier = event_id(claim.type, source.key, period)
         if identifier in seen_ids:

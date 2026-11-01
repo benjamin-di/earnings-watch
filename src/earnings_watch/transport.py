@@ -157,7 +157,11 @@ class Transport:
                             if response.status_code in {301, 302, 303, 307, 308}:
                                 if method != "GET":
                                     raise ValueError("webhook redirects are refused")
-                                url = urljoin(url, response.headers.get("location", ""))
+                                location = response.headers.get("location", "").strip()
+                                following = urljoin(url, location) if location else ""
+                                if not following or following == url:
+                                    raise ValueError("redirect without a new location")
+                                url = following
                                 continue
                             if response.status_code in {403, 429}:
                                 delay = min(21600, max(300, saved.get("backoff", 150) * 2))

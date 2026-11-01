@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.3.1] - 2026-11-02
+
+### Fixed
+
+- Publish the 0.3.0 changes; this release has no behaviour change from 0.3.0.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.2.2; calendar plans issued by 0.3.x must be re-requested after rollback.
+
+[0.3.1]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.3.1
+
+## [0.3.0] - 2026-11-02
+
+### Changed
+
+- `earnings_unwatch` adds `still_held: true` when the manual follow was removed but a holding keeps the company visible.
+- An all-exchange mute shows "Unmute all exchanges" in Connections.
+
+### Added
+
+- Optional `codex_base_url` and `codex_key_env` route the Codex backend through an OpenAI Responses-compatible endpoint while keeping `--ignore-user-config`; requests retry at most twice, and an endpoint that is unreachable or failing before any output falls back to the next backend within seconds; a run that already produced output is not repeated.
+- Claude Code receives `CLAUDE_CODE_MAX_RETRIES` from the environment.
+
+### Fixed
+
+- Do not read a numeric date such as 12.05.2027 as a publication time.
+- Bind a quoted date without a year to its reporting period, and honour an explicit year written after a dotted month (`31 Jul. 2025`).
+- Map "as at" period ends to the configured fiscal year, matching "as of".
+- Poll HKEXnews only for Hong Kong listings; numeric tickers on other exchanges use their issuer pages.
+- Stop model-backed document research once a release is verified.
+- Fail once on a redirect without a new location instead of repeating the request.
+- Accept a calendar acknowledgement when only unrelated events changed, avoiding duplicate external entries.
+- Let Unmute clear a mute set for all exchanges; removing a watchlist row no longer mutes a separate holding.
+- Skip CSV rows without a ticker or ISIN; show plain messages for non-UTF-8 uploads and unknown time zones.
+- Apply the model timeout while sending large prompts, fall back when a CLI refuses before reading, end leftover model child processes, and retry another backend only for explicit sign-in or account-limit refusals.
+- `health` and `doctor` exit 1 when the database integrity check fails.
+- `upcoming` accepts `--cursor` and `--ticker`; a missing or unavailable database (exit 3) and malformed source files (exit 1) report JSON errors instead of tracebacks.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.2.2; calendar plans issued by 0.3.0 must be re-requested after rollback (handles last 30 minutes).
+
+[0.3.0]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.3.0
+
 ## [0.2.2] - 2026-10-31
 
 ### Fixed

@@ -5,5 +5,8 @@ allowed_hosts = ["localhost", "127.0.0.1"]
 [llm]
 backends = ["none"]
 max_calls_per_run = 20
+# Optional Codex endpoint; the key is read from the named environment variable.
+# codex_base_url = "https://models.example/v1"
+# codex_key_env = "EARNINGS_CODEX_ENDPOINT_KEY"
 [documents]
 cache_max_mb = 512

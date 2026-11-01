@@ -448,6 +448,19 @@ def token_hash(path: Path, person: str) -> str | None:
         return row[0] if row else None
 
 
+# Public alias so callers outside store/ can handle database failures.
+DatabaseError = sqlite3.Error
+
+
+def _scoped_sequence(db: sqlite3.Connection, event_ids: list[str]) -> int:
+    return int(
+        db.execute(
+            "SELECT coalesce(max(seq),0) FROM event_revisions WHERE event_id IN (SELECT value FROM json_each(?))",
+            (json.dumps(event_ids),),
+        ).fetchone()[0]
+    )
+
+
 class PersonalStore:
     def __init__(self, path: Path, person: str):
         self.path, self.person = path, person
@@ -551,17 +564,21 @@ class PersonalStore:
                 "SELECT 1 FROM follows WHERE person=? AND ticker=? AND (?='' OR exchange=?) AND origin LIKE 'holdings:%'",
                 (self.person, ticker.upper(), exchange, exchange),
             ).fetchone()
-            if holding:
+            removed = db.execute(
+                "DELETE FROM follows WHERE person=? AND ticker=? AND (?='' OR exchange=?) AND origin='manual'",
+                (self.person, ticker.upper(), exchange, exchange),
+            ).rowcount
+            # Holdings and the watchlist are separate lists: only an unwatch that
+            # removed no manual follow means "stop showing this holding".
+            if holding and not removed:
                 db.execute(
                     "INSERT OR IGNORE INTO mutes VALUES(?,?,?)",
                     (self.person, ticker.upper(), exchange),
                 )
-            db.execute(
-                "DELETE FROM follows WHERE person=? AND ticker=? AND (?='' OR exchange=?) AND origin='manual'",
-                (self.person, ticker.upper(), exchange, exchange),
-            )
             db.execute("UPDATE profiles SET revision=revision+1 WHERE person=?", (self.person,))
-        return {"state": "muted" if holding else "removed"}
+        if holding and not removed:
+            return {"state": "muted"}
+        return {"state": "removed"} | ({"still_held": True} if holding else {})
 
     def ledger(self, sink: str) -> tuple[int, list[Row]]:
         with connect(self.path) as db:
@@ -612,9 +629,13 @@ class PersonalStore:
                 "follows": digest(follows),
                 "ledger": ledger,
                 "ledger_rev": version[0] if version else 0,
-                "sequence": db.execute(
-                    "SELECT coalesce(max(seq),0) FROM event_revisions"
-                ).fetchone()[0],
+                "event_sequences": {
+                    row[0]: row[1]
+                    for row in db.execute(
+                        "SELECT event_id,max(seq) FROM event_revisions WHERE event_id IN (SELECT value FROM json_each(?)) GROUP BY event_id",
+                        (json.dumps(sorted(selected)),),
+                    )
+                },
             }
 
     def acknowledge(self, plan: Row, results: list[Row], handle_hash: str) -> Row:
@@ -629,7 +650,11 @@ class PersonalStore:
                 "SELECT rev FROM calendar_versions WHERE person=? AND sink=?",
                 (self.person, plan["sink"]),
             ).fetchone()
-            seq = db.execute("SELECT coalesce(max(seq),0) FROM event_revisions").fetchone()[0]
+            # Only revisions of the planned events can invalidate already-applied writes.
+            if isinstance(plan.get("scope"), list):
+                seq = _scoped_sequence(db, plan["scope"])
+            else:
+                seq = db.execute("SELECT coalesce(max(seq),0) FROM event_revisions").fetchone()[0]
             follows = [
                 dict(row)
                 for row in db.execute(

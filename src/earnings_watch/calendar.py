@@ -84,11 +84,16 @@ def plan(
     # action in the external calendar app, rather than a bulk synchronization side effect.
     if len(ops) > 100:
         raise EarningsError("over_cap", "calendar plan exceeds 100 operations")
+    # Only revisions of the events being written can invalidate this plan; the
+    # scope stays bounded by the 100-operation cap.
+    scope = sorted(op["key"].removeprefix("earnings-watch:") for op in ops)
+    sequences = snapshot["event_sequences"]
     payload = {
         "person": person.person,
         "sink": sink,
         "ledger_rev": rev,
-        "sequence": snapshot["sequence"],
+        "sequence": max((sequences.get(identifier, 0) for identifier in scope), default=0),
+        "scope": scope,
         "follows": snapshot["follows"],
         "exp": int(time.time()) + 1800,
         "operations": ops,

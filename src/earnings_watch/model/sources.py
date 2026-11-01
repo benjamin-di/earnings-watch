@@ -232,7 +232,7 @@ _AS_OF_US_RE = re.compile(
     re.IGNORECASE,
 )
 _AS_AT_RE = re.compile(
-    "\\bAS\\s+AT\\s+\\d{1,2}\\s+(?P<month>MARCH|JUNE|SEPTEMBER|DECEMBER)\\s+(?P<year>20\\d{2})\\b",
+    "\\bAS\\s+AT\\s+(?P<day>\\d{1,2})\\s+(?P<month>MARCH|JUNE|SEPTEMBER|DECEMBER)\\s+(?P<year>20\\d{2})\\b",
     re.IGNORECASE,
 )
 _INTERIM_QUALIFIER = "(?:\\s+(?:FINANCIAL\\s+)?(?:RESULTS?|REPORT|ANNOUNCEMENT))?"
@@ -388,6 +388,19 @@ def _match_earnings_period(raw: str, source: Source) -> str | None:
             return f"{year}H{elapsed // 6}" if elapsed in {6, 12} else None
         return f"{year}{('FQ' if source.period_scheme == PeriodScheme.FISCAL_Q else 'Q')}{elapsed // 3}"
     match = _AS_AT_RE.search(raw)
+    if match and source.fy_end_month != 12:
+        month = {"march": 3, "june": 6, "september": 9, "december": 12}[
+            match.group("month").lower()
+        ]
+        if int(match.group("day")) != {3: 31, 6: 30, 9: 30, 12: 31}[month]:
+            return None
+        elapsed = (month - source.fy_end_month - 1) % 12 + 1
+        if elapsed % 3:
+            return None
+        year = int(match.group("year")) + (month > source.fy_end_month)
+        if source.period_scheme == PeriodScheme.HALF_YEAR:
+            return f"{year}H{elapsed // 6}" if elapsed in {6, 12} else None
+        return f"{year}{('FQ' if source.period_scheme == PeriodScheme.FISCAL_Q else 'Q')}{elapsed // 3}"
     if match:
         as_at_year = match.group("year")
         as_at_month = match.group("month").lower()

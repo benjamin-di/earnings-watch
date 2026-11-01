@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from pathlib import Path
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Settings(BaseModel):
@@ -19,6 +20,10 @@ class Settings(BaseModel):
     max_calls_per_run: int = Field(default=20, ge=0, le=200)
     allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "[::1]"])
     backend_tokens_env: list[str] = Field(default_factory=list)
+    # Optional OpenAI Responses-compatible endpoint for the Codex backend; the
+    # key is read from the named environment variable, never from this file.
+    codex_base_url: str = ""
+    codex_key_env: str = ""
     public_url: str = ""
     oidc_issuer: str = ""
     oidc_client_id: str = "earnings-connections"
@@ -43,6 +48,30 @@ class Settings(BaseModel):
         if set(values) - NAMES:
             raise ValueError("unknown provider in allowlist")
         return values
+
+    @field_validator("codex_base_url")
+    @classmethod
+    def endpoint_url(cls, value):
+        if value and not re.fullmatch(r"https?://[^/\s\"\\]+[^\s\"\\]*", value):
+            raise ValueError("codex_base_url must be an http(s) URL")
+        return value.rstrip("/")
+
+    @field_validator("codex_key_env")
+    @classmethod
+    def endpoint_key(cls, value):
+        if value and not re.fullmatch(r"[A-Z_][A-Z0-9_]{0,63}", value):
+            raise ValueError("codex_key_env must be an environment variable name")
+        return value
+
+    @model_validator(mode="after")
+    def endpoint_pair(self):
+        if bool(self.codex_base_url) != bool(self.codex_key_env):
+            raise ValueError("set codex_base_url and codex_key_env together")
+        return self
+
+    @property
+    def codex_endpoint(self) -> tuple[str, str] | None:
+        return (self.codex_base_url, self.codex_key_env) if self.codex_base_url else None
 
     @property
     def db(self) -> Path:

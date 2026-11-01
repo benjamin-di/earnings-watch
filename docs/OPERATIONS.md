@@ -2,7 +2,7 @@
 
 Initialize once with `earnings-watch init`. The default database is `$XDG_DATA_HOME/earnings-watch/earnings.db`, falling back to `~/.local/share/earnings-watch/earnings.db`. Set `EARNINGS_WATCH_DATA_DIR` or `[paths] data_dir` to use a persistent volume. `calendar.key` sits beside it. Do not store real state in a source checkout.
 
-`doctor` checks database integrity and configured CLI versions/flags; `doctor --live` also invokes a model canary. `health` is an offline database check. Health does not establish that a provider or account is currently usable. Exit codes are 0 for success, 1 for invalid/error and 3 for skipped/degraded/unavailable work.
+`doctor` checks database integrity and configured CLI versions/flags; `doctor --live` also invokes a model canary. `health` is an offline database check; a failed integrity check exits 1. Health does not establish that a provider or account is currently usable. Exit codes are 0 for success, 1 for invalid/error and 3 for skipped/degraded/unavailable work.
 
 Run one worker per data directory. A shared maintenance lock prevents overlapping sweeps, document polls, imports and restores. The UTC worker runs a daily sweep from 23:10 and a documents pass every ten minutes. Failed daily sweeps take priority and retry on bounded ticks, including after midnight and process restarts. Pause with `freeze`; resume with `unfreeze`. `preflight` and `docs-guard` are cheap operator probes; execution rechecks its gates.
 
@@ -15,7 +15,9 @@ Release polling covers the day before an event through seven days afterward.
 Its lifetime cap covers the full configured cadence (650 attempts per event
 date); redating an event resets its attempt window. Per-host request budgets and
 backoff still apply. Successfully discovered official documents and filing cursors
-are saved even if a later issuer-page fetch fails.
+are saved even if a later issuer-page fetch fails. Model-backed document research
+runs only until a release is verified; later polls check official providers and
+the results page.
 
 Use `sources validate FILE`, then `sources import FILE`. `watch TICKER --exchange MIC` creates a manual follow. Unknown issuers queue bounded research registration. `holdings sync --feed NAME FILE` atomically replaces one feed's entries and preserves manual follows; its YAML list must reference imported, unambiguous sources. `unwatch` removes a manual follow or mutes a holding; a mute survives the next holdings refresh.
 

@@ -15,6 +15,7 @@ import yaml
 from .composition import open_service
 from .errors import EarningsError
 from .settings import load
+from .store.database import DatabaseError
 
 
 def parser() -> argparse.ArgumentParser:
@@ -63,6 +64,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--limit", type=int, default=100)
     p.add_argument("--scope", choices=["following", "all"], default="following")
+    p.add_argument("--ticker", action="append")
+    p.add_argument("--cursor")
     p.add_argument("--format", choices=["table", "json", "ics"], default="table")
     p = sub.add_parser("show")
     p.add_argument("ids", nargs="+")
@@ -142,14 +145,19 @@ def execute(args, settings):
             "paused": (settings.data_dir / ".paused").exists(),
             "backends": settings.backends,
         }
+        if result["integrity"] != "ok":
+            result["exit"] = 1
         if command == "doctor":
             from .llm.doctor import inspect
 
             async def checks():
-                return [await inspect(backend, args.live) for backend in settings.backends]
+                return [
+                    await inspect(backend, args.live, settings.codex_endpoint)
+                    for backend in settings.backends
+                ]
 
             result["capabilities"] = asyncio.run(checks())
-            if any(
+            if "exit" not in result and any(
                 r["state"] not in {"ready", "disabled"} or r.get("canary") is False
                 for r in result["capabilities"]
             ):
@@ -226,6 +234,8 @@ def execute(args, settings):
                 raise EarningsError("invalid_argument", "source file is required")
             raw = yaml.safe_load(Path(args.value).read_text())
             rows = raw.get("sources", []) if isinstance(raw, dict) else raw
+            if not isinstance(rows, list):
+                raise EarningsError("invalid_argument", "source file must list sources")
             sources = [Source.model_validate(row) for row in rows]
             if len({s.key for s in sources}) != len(sources) or len(
                 {(s.ticker, s.exchange) for s in sources}
@@ -387,7 +397,13 @@ def execute(args, settings):
         return (
             service.calendar_ics()
             if args.format == "ics"
-            else service.upcoming(args.days, limit=args.limit, scope=args.scope)
+            else service.upcoming(
+                args.days,
+                tickers=args.ticker,
+                limit=args.limit,
+                cursor=args.cursor,
+                scope=args.scope,
+            )
         )
     if command == "show":
         return service.get_events(args.ids)
@@ -459,7 +475,7 @@ def main(argv: list[str] | None = None) -> int:
             for row in rows:
                 print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
             if result["cursor"]:
-                print("More events are available; use --format json to retrieve the cursor.")
+                print(f"More events are available; continue with --cursor {result['cursor']}")
         elif isinstance(result, str):
             print(result, end="" if result.endswith("\n") else "\n")
         elif result is not None:
@@ -468,9 +484,16 @@ def main(argv: list[str] | None = None) -> int:
     except EarningsError as exc:
         print(json.dumps(exc.envelope()), file=sys.stderr)
         return 3 if exc.code == "temporarily_unavailable" else 1
-    except (ValueError, OSError, KeyError) as exc:
+    except (ValueError, OSError, KeyError, yaml.YAMLError) as exc:
         print(json.dumps(EarningsError("invalid_argument", str(exc)).envelope()), file=sys.stderr)
         return 1
+    except DatabaseError:
+        error = EarningsError(
+            "temporarily_unavailable",
+            "database unavailable; initialize it with `earnings-watch init` or retry",
+        )
+        print(json.dumps(error.envelope()), file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

@@ -94,7 +94,7 @@ _DISABLED = (
 )
 
 
-def environment(backend: str) -> dict[str, str]:
+def environment(backend: str, codex_endpoint: tuple[str, str] | None = None) -> dict[str, str]:
     names = {
         "HOME",
         "PATH",
@@ -114,15 +114,41 @@ def environment(backend: str) -> dict[str, str]:
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_BASE_URL",
             "ANTHROPIC_AUTH_TOKEN",
+            # Bounded retries let an unavailable endpoint fail before the task timeout.
+            "CLAUDE_CODE_MAX_RETRIES",
         }
         if backend == "claude-code"
-        else {"CODEX_HOME", "CODEX_API_KEY"}
+        else {"CODEX_HOME", "CODEX_API_KEY"} | ({codex_endpoint[1]} if codex_endpoint else set())
     )
     return {k: v for k, v in os.environ.items() if k in names}
 
 
+def codex_endpoint_overrides(codex_endpoint: tuple[str, str] | None) -> list[str]:
+    """Route Codex through a configured Responses endpoint without user config."""
+    if not codex_endpoint:
+        return []
+    base_url, key_env = codex_endpoint
+    provider = (
+        '{name="Earnings Watch endpoint",wire_api="responses",'
+        f"base_url={json.dumps(base_url)},env_key={json.dumps(key_env)},"
+        # Bounded retries let an unavailable endpoint fail before the task timeout.
+        "requires_openai_auth=false,request_max_retries=2,stream_max_retries=2}"
+    )
+    return [
+        "-c",
+        'model_provider="earnings_endpoint"',
+        "-c",
+        "model_providers.earnings_endpoint=" + provider,
+    ]
+
+
 def command(
-    backend: str, task: AgentTask, schema: Path, scratch: Path, research_config: Path | None = None
+    backend: str,
+    task: AgentTask,
+    schema: Path,
+    scratch: Path,
+    research_config: Path | None = None,
+    codex_endpoint: tuple[str, str] | None = None,
 ) -> list[str]:
     if task.kind not in {"json", "research"}:
         raise ValueError("unknown model task kind")
@@ -172,6 +198,7 @@ def command(
         ]
         for feature in _DISABLED:
             cmd += ["-c", f"features.{feature}=false"]
+        cmd += codex_endpoint_overrides(codex_endpoint)
         # MCP discovery/dispatch uses this host even with code mode disabled.
         # Pure transformations keep it off; research exposes only scoped tools.
         cmd += [
@@ -234,10 +261,12 @@ def command(
     return cmd
 
 
-async def bounded_read(stream: asyncio.StreamReader) -> bytes:
+async def bounded_read(stream: asyncio.StreamReader, watch: "_CodexWatch | None" = None) -> bytes:
     output = bytearray()
     while chunk := await stream.read(65536):
         output.extend(chunk)
+        if watch is not None:
+            watch.feed(chunk)
         if len(output) > 2 * 1024 * 1024:
             raise ValueError("model output exceeds 2 MiB")
     return bytes(output)
@@ -276,9 +305,110 @@ def structured_schema(model: type[BaseModel]) -> dict:
     return schema
 
 
+# Only explicit sign-in or account-limit refusals mean the backend never ran;
+# ordinary words in a failed run's output must not trigger a second paid run.
+_UNAVAILABLE = re.compile(
+    r"not logged in|login required|please run /login|invalid api key|"
+    r"authentication[ _](?:failed|required|error)|\b401\b[^\n]{0,40}unauthori[sz]ed|"
+    r"(?:usage|rate|quota)[ _]limit|rate_limit_error|quota exceeded|insufficient[ _]quota|"
+    r"exceeded your (?:current )?quota|out of (?:credits|quota)|"
+    r"overloaded_error|model is (?:currently )?(?:at capacity|overloaded)|"
+    r"\b429 too many requests|credit balance is too low|oauth token (?:has )?expired|"
+    r"\bregion (?:is )?(?:not available|not supported|unsupported|blocked)|"
+    r"unsupported country, region",
+    re.I,
+)
+# Messages of Codex error/turn.failed events for an unreachable or failing
+# endpoint. They mean "not started" only before turn output (see _CodexWatch).
+_CODEX_ENDPOINT_FAILURE = re.compile(
+    r"unexpected status (?:429|5\d\d)|waiting for network|error sending request"
+)
+
+
+class _CodexWatch:
+    """Stop a Codex run that cannot reach its endpoint before producing output.
+
+    Codex waits indefinitely for an unreachable host; without this the task
+    would hold its worker until the timeout instead of trying the next backend.
+    """
+
+    def __init__(self, process: asyncio.subprocess.Process):
+        self.process, self.turn, self.started, self.unreachable = process, False, False, False
+        self.pending = b""
+
+    @property
+    def not_started(self) -> bool:
+        return self.unreachable and not self.started
+
+    def feed(self, chunk: bytes) -> None:
+        lines = (self.pending + chunk).split(b"\n")
+        self.pending = lines.pop()
+        if len(self.pending) > 65536:
+            # Only model output produces lines this long once the turn runs.
+            self.started = self.started or self.turn
+            self.pending = b""
+        for raw in lines:
+            line = raw.decode(errors="replace")
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            kind = str(event.get("type", ""))
+            if kind == "turn.started":
+                self.turn = True
+            elif kind.startswith("item."):
+                item = event.get("item")
+                # Startup notices arrive as error items; only turn output counts.
+                if self.turn and not (isinstance(item, dict) and item.get("type") == "error"):
+                    self.started = True
+            elif kind in {"error", "turn.failed"} and not self.started:
+                error = event.get("error")
+                message = event.get("message") or (
+                    error.get("message") if isinstance(error, dict) else ""
+                )
+                if isinstance(message, str) and _CODEX_ENDPOINT_FAILURE.search(message):
+                    self.unreachable = True
+                    if "waiting for network" in message:
+                        _kill_group(self.process.pid, self.process.returncode is None)
+
+
+def _group_alive(pgid: int) -> bool:
+    """Whether any process still belongs to the CLI's group.
+
+    A process group ID stays reserved while it has members, so killing a
+    non-empty group cannot reach an unrelated process that reused the PID.
+    """
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return False
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text()
+        except OSError:
+            continue
+        fields = stat.rsplit(")", 1)[-1].split()
+        if len(fields) > 2 and fields[2] == str(pgid):
+            return True
+    return False
+
+
+def _kill_group(pid: int, leader_running: bool) -> None:
+    if not leader_running and not _group_alive(pid):
+        return
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 class CliRunner:
-    def __init__(self, backends: list[str]):
+    def __init__(self, backends: list[str], codex_endpoint: tuple[str, str] | None = None):
         self.backends = backends
+        self.codex_endpoint = codex_endpoint
         self.checked: set[str] = set()
 
     async def _one(
@@ -290,7 +420,7 @@ class CliRunner:
         if backend not in self.checked:
             from .doctor import inspect
 
-            if (await inspect(backend))["state"] != "ready":
+            if (await inspect(backend, codex_endpoint=self.codex_endpoint))["state"] != "ready":
                 raise NotStarted("model CLI does not support the required isolation flags")
             self.checked.add(backend)
         with tempfile.TemporaryDirectory(prefix="earnings-model-") as directory:
@@ -298,40 +428,54 @@ class CliRunner:
             schema = scratch / "schema.json"
             schema.write_text(json.dumps(structured_schema(task.schema)))
             process = await asyncio.create_subprocess_exec(
-                *command(backend, task, schema, scratch, research_config),
+                *command(backend, task, schema, scratch, research_config, self.codex_endpoint),
                 cwd=scratch,
-                env=environment(backend),
+                env=environment(backend, self.codex_endpoint),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
             )
             assert process.stdin and process.stdout and process.stderr
-            prompt = task.system + "\n\n" + task.prompt
-            process.stdin.write(prompt.encode())
-            await process.stdin.drain()
-            process.stdin.close()
+            prompt = (task.system + "\n\n" + task.prompt).encode()
+            stdin = process.stdin
+
+            async def feed() -> None:
+                # Inside the timeout: a CLI that never reads must not block the tick,
+                # and one that exits early (e.g. not signed in) is classified below.
+                try:
+                    stdin.write(prompt)
+                    await stdin.drain()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                finally:
+                    stdin.close()
+
+            watch = _CodexWatch(process) if backend == "codex" else None
             try:
-                stdout, stderr, _ = await asyncio.wait_for(
+                _, stdout, stderr, _ = await asyncio.wait_for(
                     asyncio.gather(
-                        bounded_read(process.stdout), bounded_read(process.stderr), process.wait()
+                        feed(),
+                        bounded_read(process.stdout, watch),
+                        bounded_read(process.stderr),
+                        process.wait(),
                     ),
                     task.timeout_s,
                 )
             except BaseException:
-                if process.returncode is None:
-                    os.killpg(process.pid, signal.SIGKILL)
+                _kill_group(process.pid, process.returncode is None)
                 await process.wait()
                 raise
+            finally:
+                # Children may outlive the CLI and keep running after it exits.
+                _kill_group(process.pid, process.returncode is None)
             if process.returncode:
                 # Never include CLI output: it can contain account details.
                 text = (stdout + stderr).decode(errors="replace")
-                if re.search(
-                    r"not logged in|login required|authenticat\w*|quota|capacity|region.*(?:block|unsupported)",
-                    text,
-                    re.I,
-                ):
+                if _UNAVAILABLE.search(text):
                     raise NotStarted("model authentication or capacity unavailable")
+                if watch is not None and watch.not_started:
+                    raise NotStarted("model endpoint unavailable")
                 raise RuntimeError("model run failed")
             if backend == "claude-code":
                 envelope = json.loads(stdout)

@@ -4,7 +4,7 @@
 
 `sec_edgar` polls submissions for 8-K Item 2.02 and relevant 6-K filings, checks exhibits and guards against conflicting periods. Configure `[providers.sec_edgar] contact="operator@example.invalid"` with a real monitored contact address before enabling it. SEC requests refuse to start without a contact user agent. No API key is required.
 
-`hkexnews` resolves the stock identifier and polls official result-announcement categories. It excludes conflicting reporting periods and stores seen announcement identifiers. Numeric tickers select this provider unless a SEC CIK is configured.
+`hkexnews` resolves the stock identifier and polls official result-announcement categories. It excludes conflicting reporting periods and stores seen announcement identifiers. Numeric tickers select this provider when the source has no exchange or `XHKG`, unless a SEC CIK is configured; other exchanges use their issuer pages.
 
 All provider requests pass through one transport: exact-host allowlist, public-address DNS checks, IP pinning, per-hop redirect checks, response limits, pacing, request budgets and a persisted 403/429 circuit breaker. Small validator-bearing responses use conditional GET. Large documents are downloaded explicitly and hashed.
 

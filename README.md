@@ -38,7 +38,9 @@ backends = ["claude-code", "codex", "none"]
 max_calls_per_run = 20
 ```
 
-Supported minimum versions are Claude Code 2.1.312 and Codex 0.164.0. Run `earnings-watch doctor --live` to check capabilities and an optional model canary. The package has no login flow. Model usage follows your CLI account's limits and terms. Missing credentials or capacity may try the next backend; a timed-out run is not repeated in the same tick.
+Supported minimum versions are Claude Code 2.1.312 and Codex 0.164.0. Run `earnings-watch doctor --live` to check capabilities and an optional model canary. The package has no login flow. Model usage follows your CLI account's limits and terms. Only an explicit sign-in or account-limit refusal, or a configured Codex endpoint that is unreachable or failing before any output, tries the next backend; a timed-out run is not repeated in the same tick.
+
+Codex runs with `--ignore-user-config`. To send it through an OpenAI Responses-compatible endpoint, set both `codex_base_url` and `codex_key_env` (the name of the environment variable holding its key) under `[llm]`; the key itself never goes in the file. Use `https://` for any endpoint that is not on the local host. Claude Code receives `ANTHROPIC_BASE_URL` and `CLAUDE_CODE_MAX_RETRIES` from the environment, so a bounded retry count lets an unavailable endpoint fail before the task timeout.
 
 ## MCP
 

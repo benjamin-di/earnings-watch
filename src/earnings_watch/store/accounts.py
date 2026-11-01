@@ -9,7 +9,7 @@ import re
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..errors import EarningsError
 from .database import connect, encode, now, check_revision
@@ -57,7 +57,12 @@ def profile(path: Path, person: str) -> dict:
 
 
 def preferences(path: Path, person: str, revision: int, values: dict, tz: str) -> dict:
-    ZoneInfo(tz)
+    try:
+        ZoneInfo(tz)
+    except (ValueError, ZoneInfoNotFoundError):
+        raise EarningsError(
+            "invalid_argument", "Choose a time zone such as Europe/Berlin."
+        ) from None
     if (
         set(values) != set(DEFAULTS)
         or any(type(values[k]) is not bool for k in ("results", "brief", "urgent"))

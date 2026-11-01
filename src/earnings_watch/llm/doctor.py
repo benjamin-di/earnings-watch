@@ -13,7 +13,7 @@ REQUIRED = {
 }
 
 
-async def inspect(backend, live=False):
+async def inspect(backend, live=False, codex_endpoint=None):
     binary = "claude" if backend == "claude-code" else "codex"
     if backend == "none":
         return {"backend": "none", "state": "disabled"}
@@ -26,7 +26,7 @@ async def inspect(backend, live=False):
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-            env=environment(backend),
+            env=environment(backend, codex_endpoint),
         )
         try:
             value, _ = await asyncio.wait_for(process.communicate(), 10)
@@ -58,7 +58,7 @@ async def inspect(backend, live=False):
             answer: str
 
         try:
-            value = await CliRunner([backend]).run(
+            value = await CliRunner([backend], codex_endpoint).run(
                 AgentTask(
                     system="Return only JSON matching the schema. No tools are permitted.",
                     prompt='Set answer to "canary-ok".',

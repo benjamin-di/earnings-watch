@@ -5,13 +5,14 @@ request an unlisted ticker. Import holdings by pasting tickers/ISINs or uploadin
 a CSV; review the preview before replacement. Only company identities are kept.
 Uploaded holdings, operator-synced holdings and the manual watchlist are separate.
 Mute a holding to hide it across reads, notifications and feeds; the mute survives
-refreshes. Exchange-qualified identities avoid ambiguous ticker selection.
+refreshes. Unmute clears it, including a mute set for all exchanges. Removing a
+watchlist row does not mute a holding of the same company. Exchange-qualified identities avoid ambiguous ticker selection.
 If a ticker exists on several exchanges, enter one of the displayed MICs in
 the Exchange field; no company is added until the identity is resolved. CSV
 identity headers (`ticker` or `isin`, and optional `exchange`) ignore case and
 surrounding spaces. A single identity column is sufficient; identity columns can
 appear in any order among other columns. Duplicate identity columns are rejected
-before import.
+before import; rows without a ticker or ISIN, such as cash lines, are skipped.
 
 Notifications use your current sign-in directory email, shown read-only. New
 people start with results-out enabled, daily brief and urgent changes disabled.

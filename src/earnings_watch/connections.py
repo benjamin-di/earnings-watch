@@ -135,13 +135,18 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     state = "Holding · Synced from your portfolio, " + synced[:10]
                 if row["state"] == "queued":
                     state = "Adding · usually within a day"
-                is_muted = (row["ticker"], row["exchange"]) in muted or (row["ticker"], "") in muted
+                exact = (row["ticker"], row["exchange"]) in muted
+                every = (row["ticker"], "") in muted
+                is_muted = exact or every
+                # Unmute targets the mute that matched; an all-exchange mute is
+                # labelled so clearing it for every exchange is explicit.
+                target = "" if every and not exact else row["exchange"]
                 fields = (
                     form_fields(profile)
                     + '<input type="hidden" name="ticker" value="'
                     + html.escape(row["ticker"], quote=True)
                     + '"><input type="hidden" name="exchange" value="'
-                    + html.escape(row["exchange"], quote=True)
+                    + html.escape(target if is_muted else row["exchange"], quote=True)
                     + '">'
                 )
                 action = (
@@ -161,7 +166,11 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     + action
                     + '">'
                     + fields
-                    + button("Unmute" if is_muted else ("Mute" if action == "mute" else "Remove"))
+                    + button(
+                        ("Unmute all exchanges" if every and not exact else "Unmute")
+                        if is_muted
+                        else ("Mute" if action == "mute" else "Remove")
+                    )
                     + "</form></li>"
                 )
             options = "".join(
@@ -331,7 +340,12 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 text = str(form.get("companies", ""))
                 upload = form.get("file")
                 if isinstance(upload, UploadFile) and upload.filename:
-                    text = (await upload.read(MAX_BODY)).decode("utf-8-sig")
+                    try:
+                        text = (await upload.read(MAX_BODY)).decode("utf-8-sig")
+                    except UnicodeDecodeError:
+                        raise EarningsError(
+                            "invalid_argument", "Upload a UTF-8 CSV or plain text file."
+                        ) from None
                 result = interests.preview(settings, person, text)
                 body = (
                     "<p>Adds "

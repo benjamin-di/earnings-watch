@@ -26,7 +26,12 @@ def preview(settings, person: str, text: str) -> dict:
             raise EarningsError("invalid_argument", "Duplicate company identity columns in CSV.")
         reader.fieldnames = fields
         rows = list(reader)
-        values = [(r.get("ticker") or r.get("isin") or "", r.get("exchange") or "") for r in rows]
+        # Spreadsheet exports often carry blank or cash-only rows; skip rows without an identity.
+        values = [
+            (r.get("ticker") or r.get("isin") or "", r.get("exchange") or "")
+            for r in rows
+            if (r.get("ticker") or r.get("isin") or "").strip()
+        ]
     else:
         values = [(v.strip(), "") for v in re.split(r"[\s,;]+", text) if v.strip()]
     if len(values) > 200:

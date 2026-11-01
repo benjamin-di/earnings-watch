@@ -62,6 +62,8 @@ def window(event: Event) -> tuple[datetime, datetime]:
 
 
 def hkex_code(source: Source) -> str | None:
+    if source.exchange not in {None, "XHKG"}:
+        return None
     return source.ticker.zfill(5) if re.fullmatch("\\d{1,5}", source.ticker) else None
 
 

@@ -39,7 +39,11 @@ async def poll(catalogue, source, transport, *, dry_run=False, research=None, pr
         if not due(event, state, now):
             continue
         if state.get("event_date", str(event.date)) != str(event.date):
-            state = {k: v for k, v in state.items() if k not in {"attempts", "last_attempt"}}
+            state = {
+                k: v
+                for k, v in state.items()
+                if k not in {"attempts", "last_attempt", "researched_release"}
+            }
         state.update(
             attempts=state.get("attempts", 0) + 1,
             last_attempt=now.isoformat(),
@@ -86,8 +90,17 @@ async def poll(catalogue, source, transport, *, dry_run=False, research=None, pr
                         if doc["verified"]:
                             found.append(doc)
                             break
-            if not found and research is not None and "generic_ir" in enabled:
-                found.extend(await research(source, row))
+            if (
+                not found
+                and not state.get("released_at")
+                and not state.get("researched_release")
+                and research is not None
+                and "generic_ir" in enabled
+            ):
+                researched = await research(source, row)
+                found.extend(researched)
+                if any(doc.get("verified") and doc.get("role") == "release" for doc in researched):
+                    state["researched_release"] = now.isoformat()
         finally:
             if not dry_run:
                 for doc in found:
