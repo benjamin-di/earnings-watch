@@ -303,9 +303,16 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     str(form.get("timezone")),
                 )
             elif action == "watch":
-                PersonalStore(settings.db, person).watch(
+                result = PersonalStore(settings.db, person).watch(
                     ticker, exchange, isin=ticker if len(ticker) == 12 else None, revision=revision
                 )
+                if result["state"] == "ambiguous":
+                    exchanges = sorted({r["exchange"] for r in result["candidates"]})
+                    raise EarningsError(
+                        "ambiguous",
+                        f"Choose an exchange for {ticker}: {', '.join(exchanges)}. "
+                        "Enter its MIC in the Exchange field.",
+                    )
             elif action == "unwatch":
                 PersonalStore(settings.db, person).unwatch(ticker, exchange, revision=revision)
             elif action in ("mute", "unmute"):

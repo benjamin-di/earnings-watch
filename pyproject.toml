@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "earnings-watch"
-version = "0.2.1"
+version = "0.2.2"
 description = "Verified issuer earnings calendars and results documents, through CLI and MCP"
 requires-python = ">=3.12"
 license = "MIT"

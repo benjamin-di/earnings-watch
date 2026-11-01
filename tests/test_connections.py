@@ -1,4 +1,6 @@
+import base64
 from datetime import datetime, timezone
+import json
 import re
 
 import httpx
@@ -12,6 +14,12 @@ from earnings_watch.interests import preview, apply
 from earnings_watch.store import accounts
 from earnings_watch.store.database import PersonalStore, connect
 from earnings_watch.transport import IdentityDirectory
+from earnings_watch.store.database import Catalogue
+from conftest import source
+
+
+def preview_payload(handle):
+    return json.loads(base64.urlsafe_b64decode(handle.rsplit(".", 1)[0]))
 
 
 class Directory:
@@ -140,7 +148,7 @@ def test_holdings_preview_is_atomic_private_and_discards_financial_values(seeded
     accounts.provision(seeded.db, "alice")
     before = accounts.profile(seeded.db, "alice")["revision"]
     value = preview(seeded, "alice", "ticker,exchange,quantity,cost\nALPHA,XNAS,900,12345")
-    assert "900" not in str(value) and "12345" not in str(value)
+    assert preview_payload(value["handle"])["items"] == [{"ticker": "ALPHA", "exchange": "XNAS"}]
     assert value["adds"] == 1 and value["removes"] == 0
     with pytest.raises(EarningsError):
         apply(seeded, "bob", value["handle"])
@@ -154,6 +162,151 @@ def test_holdings_preview_is_atomic_private_and_discards_financial_values(seeded
     assert not open_service(seeded, "alice").upcoming()["events"]
     assert open_service(seeded, "alice").upcoming(scope="all")["events"]
     assert not open_service(seeded, "bob").upcoming()["events"]
+
+
+@pytest.mark.parametrize("header", ["Ticker,Exchange", "TICKER,EXCHANGE", " ticker , Exchange "])
+def test_holdings_csv_accepts_normalized_headers(seeded, header):
+    accounts.provision(seeded.db, "alice")
+    value = preview(seeded, "alice", header + ",Quantity,Cost\nALPHA,XNAS,900,12345")
+    assert value["items"] == [{"ticker": "ALPHA", "exchange": "XNAS"}]
+    apply(seeded, "alice", value["handle"])
+    assert [(r["ticker"], r["exchange"]) for r in PersonalStore(seeded.db, "alice").follows()] == [
+        ("ALPHA", "XNAS")
+    ]
+    assert not PersonalStore(seeded.db, "bob").follows()
+    assert preview_payload(value["handle"])["items"] == [{"ticker": "ALPHA", "exchange": "XNAS"}]
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "ticker,Ticker,exchange",
+        "ticker,exchange,Exchange",
+        "quantity,ticker,Ticker",
+        "cost,exchange,Exchange,isin",
+    ],
+)
+def test_holdings_csv_refuses_duplicate_identity_columns(seeded, header):
+    accounts.provision(seeded.db, "alice")
+    before = accounts.profile(seeded.db, "alice")["revision"]
+    with pytest.raises(EarningsError, match="Duplicate company identity columns"):
+        preview(seeded, "alice", header + "\nALPHA,XNAS,XNAS")
+    assert accounts.profile(seeded.db, "alice")["revision"] == before
+    assert not PersonalStore(seeded.db, "alice").follows()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ticker\nALPHA",
+        " Ticker \r\nALPHA",
+        "isin\nUS0000000001",
+        "quantity,ticker,cost\n900,ALPHA,12345",
+        "Exchange,Cost,ISIN\nXNAS,12345,US0000000001",
+        "cost, ticker,exchange,quantity\n12345,ALPHA,XNAS,900",
+    ],
+)
+async def test_holdings_csv_identity_columns_are_optional_in_position_and_count(seeded, text):
+    Catalogue(seeded.db).put_source(source().model_copy(update={"isin": "US0000000001"}))
+    auth = browser(seeded)
+    app = create_app(seeded, auth=auth, directory=Directory())
+    async with (
+        app.earnings_app.router.lifespan_context(app.earnings_app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            cookies={auth.cookie: "a" * 43},
+        ) as client,
+    ):
+        response = await client.post(
+            "/connections/import-preview",
+            files={"file": ("holdings.csv", text.encode(), "text/csv")},
+            data={"revision": "0"},
+            headers={"Origin": "http://localhost"},
+        )
+        assert response.status_code == 200, response.text
+        assert "ALPHA XNAS" in response.text
+        assert not PersonalStore(seeded.db, "alice").follows()
+        handle = re.search(r'name="handle" value="([^"]+)"', response.text)[1]
+        payload = preview_payload(handle)
+        assert set(payload) == {"person", "revision", "exp", "items"}
+        assert payload["person"] == "alice"
+        assert payload["items"] == [{"ticker": "ALPHA", "exchange": "XNAS"}]
+        response = await client.post(
+            "/connections/import-apply",
+            data={"revision": "0", "handle": handle},
+            headers={"Origin": "http://localhost"},
+        )
+        assert response.status_code == 303
+    assert [
+        (row["ticker"], row["exchange"]) for row in PersonalStore(seeded.db, "alice").follows()
+    ] == [("ALPHA", "XNAS")]
+    assert not PersonalStore(seeded.db, "bob").follows()
+
+
+async def test_watch_ambiguous_ticker_explains_exchange_without_saving(seeded):
+    Catalogue(seeded.db).put_source(source(key="alpha-nyse", exchange="XNYS"))
+    auth = browser(seeded)
+    app = create_app(seeded, auth=auth, directory=Directory())
+    async with (
+        app.earnings_app.router.lifespan_context(app.earnings_app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            cookies={auth.cookie: "a" * 43},
+        ) as client,
+    ):
+        response = await client.post(
+            "/connections/watch",
+            data={"ticker": "ALPHA", "revision": "0"},
+            headers={"Origin": "http://localhost"},
+        )
+        assert response.status_code == 409
+        assert "Choose an exchange for ALPHA" in response.text
+        assert "XNAS" in response.text and "XNYS" in response.text
+        assert not PersonalStore(seeded.db, "alice").follows()
+        assert accounts.profile(seeded.db, "alice")["revision"] == 0
+        response = await client.post(
+            "/connections/watch",
+            data={"ticker": "ALPHA", "exchange": "XNYS", "revision": "0"},
+            headers={"Origin": "http://localhost"},
+        )
+        assert response.status_code == 303
+        assert [
+            (r["ticker"], r["exchange"]) for r in PersonalStore(seeded.db, "alice").follows()
+        ] == [("ALPHA", "XNYS")]
+        assert not PersonalStore(seeded.db, "bob").follows()
+
+
+@pytest.mark.parametrize("separator", ["\r", "\n", "\r\n"])
+async def test_plaintext_holdings_line_endings_work_in_preview_and_browser(seeded, separator):
+    Catalogue(seeded.db).put_source(source(key="beta", ticker="BETA"))
+    accounts.provision(seeded.db, "alice")
+    text = separator.join(("ALPHA", "BETA"))
+    value = preview(seeded, "alice", text)
+    assert value["items"] == [
+        {"ticker": "ALPHA", "exchange": "XNAS"},
+        {"ticker": "BETA", "exchange": "XNAS"},
+    ]
+    auth = browser(seeded)
+    app = create_app(seeded, auth=auth, directory=Directory())
+    async with (
+        app.earnings_app.router.lifespan_context(app.earnings_app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            cookies={auth.cookie: "a" * 43},
+        ) as client,
+    ):
+        response = await client.post(
+            "/connections/import-preview",
+            data={"companies": text, "revision": "0"},
+            headers={"Origin": "http://localhost"},
+        )
+        assert response.status_code == 200, response.text
+        assert "ALPHA" in response.text and "BETA" in response.text
+        assert accounts.profile(seeded.db, "alice")["revision"] == 0
+        assert not PersonalStore(seeded.db, "alice").follows()
 
 
 async def test_directory_minimal_contract_and_outage_does_not_serve_stale_cache():

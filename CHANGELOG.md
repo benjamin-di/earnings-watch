@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.2] - 2026-10-31
+
+### Fixed
+
+- Explain ambiguous watchlist tickers in Connections and require an exchange before saving.
+- Accept CSV identity headers regardless of case or surrounding spaces; reject duplicate identity columns before importing holdings.
+- Accept single-column ticker/ISIN CSV files and identity columns after other columns; preserve preview and per-person replacement boundaries.
+- Preserve plaintext holdings imports across CR, LF and CRLF line endings.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.2.1.
+
+[0.2.2]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.2.2
+
 ## [0.2.1] - 2026-10-31
 
 ### Fixed

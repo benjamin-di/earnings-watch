@@ -19,8 +19,13 @@ from .store.database import LibraryReader, PersonalStore
 def preview(settings, person: str, text: str) -> dict:
     if len(text.encode()) > 32768:
         raise EarningsError("over_cap", "Import at most 200 companies at once.")
-    if "," in text and text.splitlines()[0].lower().startswith(("ticker,", "isin,")):
-        rows = list(csv.DictReader(io.StringIO(text)))
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    fields = [field.strip().lower() for field in (reader.fieldnames or [])]
+    if any(field in ("ticker", "isin") for field in fields):
+        if any(fields.count(field) > 1 for field in ("ticker", "isin", "exchange")):
+            raise EarningsError("invalid_argument", "Duplicate company identity columns in CSV.")
+        reader.fieldnames = fields
+        rows = list(reader)
         values = [(r.get("ticker") or r.get("isin") or "", r.get("exchange") or "") for r in rows]
     else:
         values = [(v.strip(), "") for v in re.split(r"[\s,;]+", text) if v.strip()]

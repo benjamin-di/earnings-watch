@@ -1,12 +1,14 @@
-# Implementation and remaining work
+# Implementation and qualification
 
-The 0.2.0 candidate adds Connections and personal subscriptions to the standalone core. Publication and production migration
-are separate acceptance gates; a passing local check does not establish either.
+The standalone core includes Connections and personal subscriptions. Release
+publication and production migration are separate acceptance gates; installing a
+published package does not activate an existing installation's replacement.
 
 | Area | Implemented behavior |
 | --- | --- |
 | Core | Shared SQLite issuer facts, evidence verification, revision/change feed, person-scoped follows and quotas |
 | Interfaces | CLI, Python service, stdio MCP, authenticated standalone and gateway HTTP MCP |
+| Connections | Browser sign-in, private holdings previews, watchlists, persistent mutes, directory email and revocable calendar subscriptions |
 | Maintenance | Bounded model extraction and research, registration, source repair, provider selection, restart-safe UTC worker |
 | Documents | SEC/HKEX and issuer-page polling, verified links, opt-in downloads, content-addressed cache and personal receipts |
 | Calendar | Optional signed plan/ack and ICS; the client's external Outlook app applies writes |
@@ -17,20 +19,17 @@ Legacy migration blocks notification delivery and calendar planning until an
 external review accounts for imported effects. Original snapshots remain rollback
 evidence; exports project the current catalogue without exposing storage fields.
 
-The candidate audit added lifecycle regressions for monotonic revisions after
+Lifecycle regressions cover monotonic revisions after
 removal/reintroduction, personal download retention, schema upgrades, UTC date
 boundaries, disabled models, interrupted HTTP requests, download integrity and
 the complete release-polling window. Accepted official documents survive a later
 issuer-page failure; the failure remains visible to maintenance.
 
-## Required before release
+## Release qualification
 
-The Connections and subscription implementation at tree
-`94f3729db63299b81095f64f4963339edd9ab2a2` passed an independent sensitive
-re-review on 2026-10-31: 104 focused tests and 21 adversarial probes. The
-complete local gate passed 294 tests, static checks and distribution builds.
-This is source validation; production migration and live acceptance remain
-separate requirements below.
+Apply these checks to each release. Historical test counts and a published
+version do not replace validation of a new source tree. Installation-specific
+delivery status belongs in the operator's private deployment records.
 
 - Qualify the exact source through CI, including both Docker targets on both
   supported architectures and the installed model binaries.
@@ -51,7 +50,7 @@ separate requirements below.
 - Reconcile uncertain deliveries externally before enabling notification delivery.
 
 Schema 3 preserves personal profiles and subscription state as well as personal download receipts when their public events/documents
-are retired. Existing candidate databases require an explicit stopped upgrade;
+are retired. Existing databases with older schemas require an explicit stopped upgrade;
 see [operations](OPERATIONS.md). No live data is migrated by installing a wheel.
 
 ## Deferred integrations
