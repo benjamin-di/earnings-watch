@@ -8,6 +8,7 @@ WORKDIR /app
 FROM base AS dependencies
 COPY --from=uv /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock README.md LICENSE NOTICE ./
+RUN uv sync --locked --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --locked --no-dev --no-editable
 FROM base AS serve

@@ -6,12 +6,12 @@
     "url": "https://github.com/benjamin-di/earnings-watch",
     "source": "github"
   },
-  "version": "0.3.1",
+  "version": "0.3.3",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "earnings-watch",
-      "version": "0.3.1",
+      "version": "0.3.3",
       "transport": {
         "type": "stdio"
       },

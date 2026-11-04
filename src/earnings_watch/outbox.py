@@ -37,7 +37,7 @@ def enqueue(path, person: str, key: str, kind: str, payload: dict[str, Any]) -> 
             "INSERT OR IGNORE INTO deliveries(person,key,kind,state,payload) VALUES(?,?,?,?,?)",
             (person, key, kind, "pending", encode(payload)),
         )
-        if kind in {"results", "urgent"}:
+        if kind in {"results", "brief", "urgent"}:
             db.execute(
                 "UPDATE deliveries SET payload=? WHERE person=? AND key=? AND state='pending'",
                 (encode(payload), person, key),

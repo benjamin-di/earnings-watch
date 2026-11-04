@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "earnings-watch"
-version = "0.3.1"
+version = "0.3.3"
 description = "Verified issuer earnings calendars and results documents, through CLI and MCP"
 requires-python = ">=3.12"
 license = "MIT"
@@ -18,6 +18,8 @@ earnings-watch = "earnings_watch.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/benjamin-di/earnings-watch"
+Repository = "https://github.com/benjamin-di/earnings-watch"
+Issues = "https://github.com/benjamin-di/earnings-watch/issues"
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.25", "pytest-cov>=6", "ruff>=0.12,<1", "mypy>=1.18,<2", "types-PyYAML", "build"]

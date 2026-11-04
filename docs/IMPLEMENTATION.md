@@ -15,6 +15,11 @@ published package does not activate an existing installation's replacement.
 | Notifications | Results-out, useful daily briefs and urgent changes; explicit transport, no automatic uncertain-effect replay |
 | Operations | Backup/restore, freeze, health/doctor, legacy import/export, separate server/worker images |
 
+These capabilities are implemented in the source. Their offline tests use fake
+network, model, identity and mail boundaries; they do not establish that an
+installation's accounts, provider pages or transport are usable. Connections is
+optional, and its identity directory and mail transport are configured externally.
+
 Legacy migration blocks notification delivery and calendar planning until an
 external review accounts for imported effects. Original snapshots remain rollback
 evidence; exports project the current catalogue without exposing storage fields.
@@ -24,6 +29,9 @@ removal/reintroduction, personal download retention, schema upgrades, UTC date
 boundaries, disabled models, interrupted HTTP requests, download integrity and
 the complete release-polling window. Accepted official documents survive a later
 issuer-page failure; the failure remains visible to maintenance.
+Registration rejects a proposed source key belonging to another issuer. SEC
+timestamps retain explicit offsets, calendar feeds represent timed milestones
+without an invented duration, and unsent briefs refresh before submission.
 
 ## Release qualification
 
@@ -35,8 +43,9 @@ delivery status belongs in the operator's private deployment records.
   supported architectures and the installed model binaries.
 - Complete live acceptance for source repair and the optional browser reader.
   Offline mock coverage does not establish live account or provider availability.
-- Review the actual tagged public export and its privacy checks, then verify the
-  public release, distributions, images, PyPI and MCP Registry publication.
+- Review the exact public source tree and its privacy checks, then verify the
+  immutable public tag, release, distributions, images, PyPI and MCP Registry
+  publication. Source-home changes follow the [source contract](SOURCE.md).
 
 ## Required before replacing an existing installation
 
@@ -49,12 +58,15 @@ delivery status belongs in the operator's private deployment records.
   state rollback evidence separately from the image rollback.
 - Reconcile uncertain deliveries externally before enabling notification delivery.
 
-Schema 3 preserves personal profiles and subscription state as well as personal download receipts when their public events/documents
-are retired. Existing databases with older schemas require an explicit stopped upgrade;
-see [operations](OPERATIONS.md). No live data is migrated by installing a wheel.
+Schema 3 preserves personal profiles and subscription state as well as personal
+download receipts when their public events/documents are retired. Existing
+databases with older schemas require an explicit stopped upgrade; see
+[operations](OPERATIONS.md). No live data is migrated by installing a wheel.
 
-## Deferred integrations
+## External integrations
 
-SMTP and a direct Outlook writer remain external integrations. Hosted routing, mail transport and production migration belong to each installation.
-The current optional calendar workflow uses the MCP client's external Outlook
-app and requires no Microsoft credentials in this package.
+An in-package SMTP sender and a direct Outlook writer are not implemented.
+Notifications use an explicit external transport. The optional delegated calendar
+workflow already supports Outlook through the client's app and requires no
+Microsoft credentials in this package. Hosted routing, mail transport and
+production migration belong to each installation.

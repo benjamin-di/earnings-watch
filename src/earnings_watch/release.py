@@ -145,9 +145,9 @@ async def _sec(
         if form == "8-K" and verdict == "conflict" or (form == "6-K" and (not results_6k)):
             rejected.append(accession)
             continue
-        published = datetime.fromisoformat(accepted.rstrip("Z").split(".")[0]).replace(
-            tzinfo=EDGAR_TZ
-        )
+        published = datetime.fromisoformat(accepted)
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=EDGAR_TZ)
         label = f"SEC {form}{(' Item 2.02' if form == '8-K' else '')} {accession}"
         link = ResultsLink(
             title=f"{source.name} {event.period} results ({form} exhibit)",

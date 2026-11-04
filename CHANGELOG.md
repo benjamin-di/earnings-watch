@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.3.3] - 2026-11-04
+
+### Fixed
+
+- Exclude internal review records from the maintained source tree.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.3.2; no schema change.
+
+[0.3.3]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.3.3
+
+## [0.3.2] - 2026-11-02
+
+### Fixed
+
+- Publish backups only after completion so failed or interrupted copies can be retried, and create restored databases with private file permissions.
+- Preserve explicit timezone offsets and fractional seconds in SEC filing acceptance timestamps.
+- Represent timed calendar-feed milestones without an invalid end equal to their start; all-day events keep their next-day end.
+- Use a CSV row's ISIN when its ticker contains only whitespace, preserving that holding in the import preview.
+- Return HTTP 503 when the database integrity check fails.
+- Refresh pending daily briefs with current facts and documents after transport-readiness delays; uncertain submissions remain immutable.
+- Reject researched source keys that already identify a different issuer instead of overwriting that issuer's catalogue entry.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.3.1; no schema change.
+
+[0.3.2]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.3.2
+
 ## [0.3.1] - 2026-11-02
 
 ### Fixed

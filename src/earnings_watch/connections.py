@@ -418,7 +418,8 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
 
     async def health(request):
         try:
-            return JSONResponse({"integrity": integrity(settings.db)})
+            result = integrity(settings.db)
+            return JSONResponse({"integrity": result}, 200 if result == "ok" else 503)
         except Exception:
             return JSONResponse({"error": "unavailable"}, 503)
 

@@ -2,7 +2,7 @@
 
 Initialize once with `earnings-watch init`. The default database is `$XDG_DATA_HOME/earnings-watch/earnings.db`, falling back to `~/.local/share/earnings-watch/earnings.db`. Set `EARNINGS_WATCH_DATA_DIR` or `[paths] data_dir` to use a persistent volume. `calendar.key` sits beside it. Do not store real state in a source checkout.
 
-`doctor` checks database integrity and configured CLI versions/flags; `doctor --live` also invokes a model canary. `health` is an offline database check; a failed integrity check exits 1. Health does not establish that a provider or account is currently usable. Exit codes are 0 for success, 1 for invalid/error and 3 for skipped/degraded/unavailable work.
+`doctor` checks database integrity and configured CLI versions/flags; `doctor --live` also invokes a model canary. `health` is an offline database check; a failed integrity check exits 1. The HTTP `/health` endpoint returns 503 on a failed integrity check or an unavailable database, and 200 only for `ok`. Health does not establish that a provider or account is currently usable. Exit codes are 0 for success, 1 for invalid/error and 3 for skipped/degraded/unavailable work.
 
 Run one worker per data directory. A shared maintenance lock prevents overlapping sweeps, document polls, imports and restores. The UTC worker runs a daily sweep from 23:10 and a documents pass every ten minutes. Failed daily sweeps take priority and retry on bounded ticks, including after midnight and process restarts. Pause with `freeze`; resume with `unfreeze`. `preflight` and `docs-guard` are cheap operator probes; execution rechecks its gates.
 
@@ -19,25 +19,46 @@ are saved even if a later issuer-page fetch fails. Model-backed document researc
 runs only until a release is verified; later polls check official providers and
 the results page.
 
+SEC acceptance timestamps retain their explicit timezone and fractional seconds.
+Only legacy timestamps without an offset use the exchange's local timezone.
+
 Use `sources validate FILE`, then `sources import FILE`. `watch TICKER --exchange MIC` creates a manual follow. Unknown issuers queue bounded research registration. `holdings sync --feed NAME FILE` atomically replaces one feed's entries and preserves manual follows; its YAML list must reference imported, unambiguous sources. `unwatch` removes a manual follow or mutes a holding; a mute survives the next holdings refresh.
 
 `overrides set ID --kind remove` and `overrides set ID --kind timing_selection --payload JSON` record operator decisions. Timing selections require the candidate fingerprint, review date and reason. `overrides import FILE` accepts a list of `event_id`, `kind`, `payload`; `clear` removes one decision. A decision does not invent evidence.
 
 Notifications are prepared durably but are not sent by the default worker. Invoke `notify --channel stdout` or `notify --channel webhook --url HTTPS_URL` explicitly. The three active kinds are results-out, useful local daily briefs and coalesced urgent timing changes. Existing historical delivery records are retained for reconciliation. Inspect without sending with `notify --preview` or `notify --inspect`. Resolve an unknown with `notify --resolve KEY --receipt FILE`, using transport evidence, person, key, current attempt and payload hash; never guess that a timed-out submission did not send. Delivery keys are stable. The outbox marks an attempt unknown before contacting a channel; an unknown outcome is never replayed automatically. Reconcile uncertain deliveries externally before migrating or replaying them. SMTP and direct Outlook writing remain external integrations. See [Connections setup](CONNECTIONS.md) for browser identity, feeds and settings.
 
-Use `backup NEW_PATH` for a consistent SQLite backup. Maintenance retains seven daily backups. Keep a separate protected copy and the signing key. To restore, stop serving, `freeze`, run `restore BACKUP_PATH`, validate with `doctor`, then restart and unfreeze. Do not treat rolling back an image as a state rollback. Newer schema versions are refused.
+Preparation refreshes an unsent daily brief from current facts and documents
+after a transport-readiness delay. Once a submission is uncertain, its payload
+and receipt identity remain fixed for external reconciliation. Urgent delivery
+also rechecks the latest material transition before submission and supersedes
+obsolete pending notices.
+
+Use `backup NEW_PATH` for a consistent SQLite backup. A complete backup is published
+atomically with private file permissions; an error leaves the destination available
+for retry, and an existing destination is never replaced. The destination filesystem
+must support hard links for this exclusive publication; unsupported storage fails
+without publishing a backup. Maintenance retains seven
+daily backups. Keep a separate protected copy and the signing key. To restore, stop
+serving, `freeze`, run `restore BACKUP_PATH`, validate with `doctor`, then restart and
+unfreeze. New restore files use private permissions. Do not treat rolling back an
+image as a state rollback. Newer schema versions are refused.
 
 Schema 2 decouples historical personal download receipts from the current public
 document catalogue. Removing an event retires its catalogue documents but keeps
 the user's files and receipts. A new download still requires a current catalogue
 document; deleting a person removes that person's receipts.
 
-To upgrade a schema-1 candidate, freeze it and take a database backup with the old
+Schema 3 adds personal profiles, notification preferences, persistent mutes,
+revocable feed subscriptions and database identity for cursor invalidation after
+restore. Schema-1 upgrades apply both migrations in the same transaction.
+
+To upgrade a schema-1 or schema-2 database, freeze it and take a database backup with the old
 version, preserve `calendar.key`, and stop the server and worker. Rehearse on a
 copy first. Run `earnings-watch init` with the new version against the stopped
 data directory, then run `doctor`, restart and unfreeze. The upgrade is atomic and
 idempotent; ordinary reads and worker startup never migrate a database. An older
-binary cannot read schema 2. Rollback requires the older binary and its matching
+binary that supports only an earlier schema cannot read schema 3. Rollback requires the older binary and its matching
 database backup, with the original signing key.
 
 Legacy migration must use a stopped-state copy containing `ir-sources.yaml`, `events.yaml` and optionally `earnings-watch-mail.json`. Import into an empty database with `import --legacy DIR`. It splits facts, polling, documents and calendar state atomically and retains original projections in an unknown migration receipt. `export events --legacy`, `export sources --legacy` and `export mail --legacy` support rehearsal. Do not cut over a live installation until consumer parity, calendar/mail reconciliation, backup restoration and the quiet window have passed.

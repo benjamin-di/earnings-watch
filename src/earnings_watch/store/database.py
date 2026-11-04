@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import sqlite3
+import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -133,15 +134,21 @@ def _upgrade(path: Path) -> None:
 def backup(path: Path, destination: Path) -> None:
     if destination.resolve() == path.resolve() or destination.exists():
         raise EarningsError("invalid_argument", "backup destination must be a new file")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, name = tempfile.mkstemp(prefix=".backup-", dir=destination.parent)
     os.close(fd)
-    with connect(path) as db:
-        target = sqlite3.connect(destination)
-        try:
-            db.backup(target)
-        finally:
-            target.close()
+    staged = Path(name)
+    try:
+        with connect(path) as db:
+            target = sqlite3.connect(staged)
+            try:
+                db.backup(target)
+            finally:
+                target.close()
+        # Publish only a complete backup, without replacing a concurrent backup.
+        os.link(staged, destination)
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 def integrity(path: Path) -> str:
@@ -718,8 +725,16 @@ class PersonalStore:
 def restore(path: Path, source: Path) -> None:
     if integrity(source) != "ok":
         raise EarningsError("invalid_argument", "restore source failed integrity check")
+    # Secure creation and SQLite must use the same target for dangling symlinks.
+    path = path.resolve()
     with connect(source) as origin:
         # Use the backup API so existing readers and WAL handles stay valid.
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            os.close(fd)
         destination = sqlite3.connect(path, timeout=5)
         try:
             origin.backup(destination)

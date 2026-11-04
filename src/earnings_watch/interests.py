@@ -27,11 +27,11 @@ def preview(settings, person: str, text: str) -> dict:
         reader.fieldnames = fields
         rows = list(reader)
         # Spreadsheet exports often carry blank or cash-only rows; skip rows without an identity.
-        values = [
-            (r.get("ticker") or r.get("isin") or "", r.get("exchange") or "")
-            for r in rows
-            if (r.get("ticker") or r.get("isin") or "").strip()
-        ]
+        values = []
+        for row in rows:
+            identity = (row.get("ticker") or "").strip() or (row.get("isin") or "").strip()
+            if identity:
+                values.append((identity, row.get("exchange") or ""))
     else:
         values = [(v.strip(), "") for v in re.split(r"[\s,;]+", text) if v.strip()]
     if len(values) > 200:

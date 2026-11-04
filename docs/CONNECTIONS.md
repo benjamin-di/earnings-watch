@@ -13,6 +13,7 @@ identity headers (`ticker` or `isin`, and optional `exchange`) ignore case and
 surrounding spaces. A single identity column is sufficient; identity columns can
 appear in any order among other columns. Duplicate identity columns are rejected
 before import; rows without a ticker or ISIN, such as cash lines, are skipped.
+A blank or whitespace-only ticker uses the row's ISIN when one is provided.
 
 Notifications use your current sign-in directory email, shown read-only. New
 people start with results-out enabled, daily brief and urgent changes disabled.
@@ -25,7 +26,9 @@ keep it private. Resetting it stops the old subscription. Calendar apps choose
 refresh timing, often hours. For a particular event in your main calendar, ask
 your MCP client to plan that event and apply it through your Outlook connector.
 Earnings stores no calendar credentials. Unfollowing never deletes a delegated
-personal-calendar entry.
+personal-calendar entry. A verified publication clock is an instant without an
+assumed duration in the subscription feed; an event without a verified clock
+occupies its whole date.
 
 ## Operator setup
 

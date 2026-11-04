@@ -6,7 +6,9 @@ Verified issuer earnings calendars and results documents through a CLI, Python A
 
 Calendar updates are optional. Earnings Watch produces an operation plan; your MCP client uses its external Outlook app to apply it and acknowledges confirmed writes. No Microsoft credentials or calendar SDK are required by this package.
 
-Requires Python 3.12+. Install a release wheel with `uv tool install path/to/earnings_watch-0.1.0-py3-none-any.whl`, or develop from a source checkout:
+Maintained source and contributions: [benjamin-di/earnings-watch](https://github.com/benjamin-di/earnings-watch). See [Source and releases](docs/SOURCE.md).
+
+Requires Python 3.12+. Install the published package with `uv tool install earnings-watch`, or develop from a source checkout:
 
 ```sh
 make bootstrap

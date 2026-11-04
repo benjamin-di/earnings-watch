@@ -5,11 +5,72 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  source:
+    name: Source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: make bootstrap
-      - run: make check
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify checkout
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.5'
+          enable-cache: false
+      - name: Source gate
+        run: make ci-check
+      - name: Retain source report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-junit
+          path: reports/junit/check.xml
+          if-no-files-found: error
+          overwrite: true
+  images:
+    name: Images (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify checkout
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Set up arm64 execution
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Qualify images
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: python3 scripts/ci-images.py --arch "$ARCH"
+      - name: Retain image evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: images-${{ matrix.arch }}
+          path: |
+            reports/images/*.json
+            reports/images/*.log
+          if-no-files-found: error
+          overwrite: true

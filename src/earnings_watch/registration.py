@@ -59,6 +59,13 @@ async def register_pending(
                 and source.exchange != row["exchange"]
             ):
                 raise ValueError("proposed issuer identifiers disagree with the request")
+            existing = next((s for s in catalogue.sources() if s.key == source.key), None)
+            if existing is not None and (
+                (existing.ticker, existing.exchange) != (source.ticker, source.exchange)
+                or (existing.isin and existing.isin != source.isin)
+                or (existing.sec_cik and existing.sec_cik != source.sec_cik)
+            ):
+                raise ValueError("proposed source key already identifies another issuer")
             host = urlsplit(source.calendar_url).hostname
             transport = Transport({host} if host else set())
             page = await capture(transport, source.calendar_url)

@@ -29,6 +29,10 @@ def render(events: list[dict[str, Any]]) -> str:
             ]
         )
         for field in ("start", "end"):
+            # RFC 5545 requires DTEND to be later than DTSTART. A milestone
+            # without a duration is represented by DTSTART alone.
+            if field == "end" and not entry["all_day"] and entry["end"] == entry["start"]:
+                continue
             prefix = "DTSTART" if field == "start" else "DTEND"
             if entry["all_day"]:
                 lines.append(prefix + ";VALUE=DATE:" + entry[field].replace("-", ""))

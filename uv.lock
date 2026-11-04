@@ -456,7 +456,7 @@ wheels = [
 
 [[package]]
 name = "earnings-watch"
-version = "0.3.1"
+version = "0.3.3"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
