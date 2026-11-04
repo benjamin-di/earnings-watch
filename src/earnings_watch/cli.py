@@ -8,18 +8,21 @@ import json
 import secrets
 import sys
 from pathlib import Path
+from typing import NoReturn
 from urllib.parse import urlsplit
 
-import yaml
-
-from .composition import open_service
+from .diagnostics import configure_logging, executable_diagnostics, write_error
 from .errors import EarningsError
-from .settings import load
-from .store.database import DatabaseError
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        write_error(EarningsError("invalid_argument", "invalid command arguments").envelope())
+        self.exit(2)
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(
+    root = _ArgumentParser(
         prog="earnings-watch", description="Verified issuer earnings dates and results documents"
     )
     root.add_argument("--config", type=Path)
@@ -117,6 +120,9 @@ def parser() -> argparse.ArgumentParser:
 
 
 def execute(args, settings):
+    import yaml
+
+    from .composition import open_service
     from .store.database import (
         Catalogue,
         LibraryReader,
@@ -312,7 +318,7 @@ def execute(args, settings):
             from .mcp_server import create, person_context
 
             person_context.set(args.person)
-            create(settings).run(transport="stdio")
+            create(settings).run(transport="stdio", show_banner=False)
         return None
     if command == "holdings":
         from .store.database import sync_holdings
@@ -457,7 +463,7 @@ def execute(args, settings):
     raise EarningsError("invalid_argument", "unknown command")
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     # --json works before or after subcommands.
     json_output = "--json" in raw
@@ -465,6 +471,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(raw)
     if json_output and args.command == "upcoming":
         args.format = "json"
+    import yaml
+
+    from .settings import load
+    from .store.database import DatabaseError
+
     try:
         result = execute(args, load(args.config))
         if args.command == "upcoming" and args.format == "table":
@@ -482,18 +493,39 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"ok": True, **result}, default=str, indent=2))
         return result.get("exit", 0) if isinstance(result, dict) else 0
     except EarningsError as exc:
-        print(json.dumps(exc.envelope()), file=sys.stderr)
+        write_error(exc.envelope())
         return 3 if exc.code == "temporarily_unavailable" else 1
-    except (ValueError, OSError, KeyError, yaml.YAMLError) as exc:
-        print(json.dumps(EarningsError("invalid_argument", str(exc)).envelope()), file=sys.stderr)
+    except (ValueError, OSError, KeyError, yaml.YAMLError):
+        write_error(
+            EarningsError(
+                "invalid_argument", "invalid command arguments or configuration"
+            ).envelope()
+        )
         return 1
     except DatabaseError:
         error = EarningsError(
             "temporarily_unavailable",
             "database unavailable; initialize it with `earnings-watch init` or retry",
         )
-        print(json.dumps(error.envelope()), file=sys.stderr)
+        write_error(error.envelope())
         return 3
+
+
+def main(argv: list[str] | None = None) -> int:
+    configure_logging()
+    with executable_diagnostics():
+        try:
+            return _main(argv)
+        except KeyboardInterrupt:
+            write_error(EarningsError("interrupted", "command interrupted").envelope())
+            return 130
+        except Exception as error:
+            write_error(
+                EarningsError(
+                    "internal_error", "command failed", error_type=type(error).__name__
+                ).envelope()
+            )
+            return 1
 
 
 if __name__ == "__main__":

@@ -1,5 +1,20 @@
 # Operations
 
+## Build identity
+
+Connections pages, native MCP server information and retained diagnostics use the
+identity embedded in the installed package. The identity contains the product
+version and full source revision; each process also has its own diagnostic
+instance identifier. Runtime environment variables and the working directory do
+not change it. Missing or invalid package metadata reports `unknown`.
+
+Source builds stamp this metadata before building the distributions or images.
+Copying a source checkout without the build step does not establish its producing
+revision. A footer or log identity identifies the running artifact; image digest,
+deployment and provider acceptance remain separate evidence.
+
+## Runtime operations
+
 Initialize once with `earnings-watch init`. The default database is `$XDG_DATA_HOME/earnings-watch/earnings.db`, falling back to `~/.local/share/earnings-watch/earnings.db`. Set `EARNINGS_WATCH_DATA_DIR` or `[paths] data_dir` to use a persistent volume. `calendar.key` sits beside it. Do not store real state in a source checkout.
 
 `doctor` checks database integrity and configured CLI versions/flags; `doctor --live` also invokes a model canary. `health` is an offline database check; a failed integrity check exits 1. The HTTP `/health` endpoint returns 503 on a failed integrity check or an unavailable database, and 200 only for `ok`. Health does not establish that a provider or account is currently usable. Exit codes are 0 for success, 1 for invalid/error and 3 for skipped/degraded/unavailable work.

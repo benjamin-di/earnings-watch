@@ -10,9 +10,16 @@ COPY --from=uv /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock README.md LICENSE NOTICE ./
 RUN uv sync --locked --no-dev --no-install-project
 COPY src ./src
-RUN uv sync --locked --no-dev --no-editable
+COPY scripts/stamp-build-identity.py scripts/check-build-identity.py /tmp/
+ARG SOURCE_REVISION
+ARG PRODUCT_VERSION
+RUN test -n "$SOURCE_REVISION" && test -n "$PRODUCT_VERSION" && \
+    python /tmp/stamp-build-identity.py --revision "$SOURCE_REVISION" --version "$PRODUCT_VERSION" --root /app && \
+    uv sync --locked --no-dev --no-editable && \
+    /app/.venv/bin/python -I /tmp/check-build-identity.py --revision "$SOURCE_REVISION" --version "$PRODUCT_VERSION"
 FROM base AS serve
 COPY --from=dependencies /app/.venv /app/.venv
+COPY scripts/check-build-identity.py /usr/local/bin/check-build-identity.py
 USER 1000:1000
 VOLUME /data
 HEALTHCHECK --interval=60s --timeout=10s CMD ["earnings-watch", "health", "--json"]

@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Show the producing build on Connections pages and in native MCP server information.
+- Attribute retained application diagnostics to the packaged build and process while preserving command results and protocol output.
+
 ## [0.3.3] - 2026-11-04
 
 ### Fixed
