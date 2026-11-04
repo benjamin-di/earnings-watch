@@ -7,6 +7,8 @@ import os
 import re
 from urllib.parse import urlsplit
 from starlette.responses import JSONResponse
+from . import diagnostics
+from .build_identity import BUILD
 from .mcp_server import create, person_context
 from .settings import Settings
 from .store.database import people, token_hash, LibraryReader
@@ -14,6 +16,7 @@ from .store.database import people, token_hash, LibraryReader
 
 class AuthenticatedApp:
     def __init__(self, settings: Settings, mode: str, *, directory=None):
+        diagnostics.configure_logging()
         self.settings, self.mode, self.directory = settings, mode, directory
         if mode not in {"standalone", "gateway"}:
             raise ValueError("invalid HTTP identity mode")
@@ -23,7 +26,7 @@ class AuthenticatedApp:
         from starlette.applications import Starlette
         from starlette.routing import Mount
 
-        monitor = FastMCP("Earnings operations", mask_error_details=True)
+        monitor = FastMCP("Earnings operations", version=BUILD.version, mask_error_details=True)
 
         @monitor.tool(annotations={"readOnlyHint": True})
         def earnings_status() -> dict:

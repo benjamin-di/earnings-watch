@@ -24,6 +24,9 @@ Issues = "https://github.com/benjamin-di/earnings-watch/issues"
 [dependency-groups]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.25", "pytest-cov>=6", "ruff>=0.12,<1", "mypy>=1.18,<2", "types-PyYAML", "build"]
 
+[tool.hatch.build]
+artifacts = ["src/earnings_watch/build_identity.json"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/earnings_watch"]
 

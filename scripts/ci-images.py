@@ -12,6 +12,7 @@ import signal
 import subprocess
 import tempfile
 import time
+import tomllib
 import uuid
 
 
@@ -97,6 +98,16 @@ def progress_summary(path):
 class Qualification:
     def __init__(self, root, arch, sha, reports):
         self.root, self.arch, self.sha = root, arch, sha
+        self.version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+        if not re.fullmatch(
+            r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", self.version
+        ):
+            raise ValueError("Expected a stable source product version")
+        self.labels = {
+            "org.opencontainers.image.source": "https://github.com/benjamin-di/earnings-watch",
+            "org.opencontainers.image.revision": sha,
+            "org.opencontainers.image.version": self.version,
+        }
         self.reports = reports
         self.reports.mkdir(parents=True, exist_ok=True)
         self.report = reports / f"{arch}.json"
@@ -106,6 +117,7 @@ class Qualification:
         self.record = {
             "schema": 1,
             "source_sha": sha,
+            "product_version": self.version,
             "architecture": arch,
             "builder_image": BUILDKIT,
             "input_key": key.hexdigest(),
@@ -241,6 +253,15 @@ class Qualification:
                             f"linux/{self.arch}",
                             "--target",
                             target,
+                            "--build-arg",
+                            f"SOURCE_REVISION={self.sha}",
+                            "--build-arg",
+                            f"PRODUCT_VERSION={self.version}",
+                            *[
+                                argument
+                                for name, value in self.labels.items()
+                                for argument in ("--label", f"{name}={value}")
+                            ],
                             "--progress=rawjson",
                             "--tag",
                             image,
@@ -262,7 +283,30 @@ class Qualification:
                         raise RuntimeError(
                             f"{target}: loaded image architecture differs from {self.arch}"
                         )
-                    probes = [("state", "sh", ["-c", SMOKE])]
+                    labels, _ = self.phase(
+                        f"{target}-labels",
+                        [
+                            "docker",
+                            "image",
+                            "inspect",
+                            "--format",
+                            "{{json .Config.Labels}}",
+                            image,
+                        ],
+                        30,
+                    )
+                    actual_labels = json.loads(labels.read_text())
+                    if not isinstance(actual_labels, dict) or any(
+                        actual_labels.get(name) != value for name, value in self.labels.items()
+                    ):
+                        raise RuntimeError(
+                            f"{target}: image provenance differs from selected source"
+                        )
+                    identity = (
+                        "python -I /usr/local/bin/check-build-identity.py "
+                        f"--revision {self.sha} --version {self.version}"
+                    )
+                    probes = [("state", "sh", ["-c", f"{SMOKE} && {identity}"])]
                     if target == "worker":
                         probes += [(cli, cli, ["--version"]) for cli in ("claude", "codex")]
                     else:
@@ -357,13 +401,15 @@ def main():
     parser.add_argument("--arch", required=True, choices=("amd64", "arm64"))
     args = parser.parse_args()
     root = Path.cwd()
-    sha = (
-        os.environ.get("FLEET_SHA")
-        or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    )
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     if not re.fullmatch("[a-f0-9]{40}", sha):
         parser.error("Expected a full source SHA")
+    for variable in ("FLEET_SHA", "GITHUB_SHA"):
+        if os.environ.get(variable) and os.environ[variable] != sha:
+            parser.error(f"{variable} differs from the selected source SHA")
     qualification = Qualification(root, args.arch, sha, root / "reports/images")
+    if os.environ.get("FLEET_VERSION") and os.environ["FLEET_VERSION"] != qualification.version:
+        parser.error("Expected release version differs from the selected source")
 
     def interrupted(signum, _frame):
         # Repeated cancellation must not interrupt cleanup of owned resources.
