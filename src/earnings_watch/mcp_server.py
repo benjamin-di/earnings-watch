@@ -9,6 +9,8 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from . import diagnostics
+from .build_identity import BUILD
 from .composition import open_service
 from .errors import EarningsError
 from .settings import Settings
@@ -20,8 +22,10 @@ MAX_RESPONSE = 128 * 1024
 
 
 def create(settings: Settings) -> FastMCP:
+    diagnostics.configure_logging()
     server = FastMCP(
         "Earnings Watch",
+        version=BUILD.version,
         instructions="Verified earnings facts are shared. Follows and calendar state belong to you. Dates without verified clocks remain all-day. Calendar updates are optional: use the external Outlook app to apply a plan, then acknowledge only confirmed operations. Never add attendees.",
     )
 

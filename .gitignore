@@ -10,3 +10,4 @@ dist/
 *.db*
 .artifacts/
 reports/
+src/earnings_watch/build_identity.json

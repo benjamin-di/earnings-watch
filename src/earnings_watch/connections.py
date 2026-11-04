@@ -7,7 +7,6 @@ import os
 from contextlib import asynccontextmanager
 from urllib.parse import quote
 
-from signin_window.connections import page
 from signin_window.oidc import BrowserAuth, OIDCConfig
 from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -21,6 +20,7 @@ from .http_server import AuthenticatedApp
 from .store import accounts
 from .store.database import Catalogue, LibraryReader, PersonalStore, integrity
 from .transport import IdentityDirectory
+from .ui import page, renderer_options
 
 MAX_BODY = 65536
 
@@ -42,7 +42,8 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 required_group=settings.oidc_required_group,
                 cookie_name="__Host-earnings",
                 claim_names=("person_id", "email", "email_verified"),
-            )
+            ),
+            **renderer_options(BrowserAuth),
         )
     native = AuthenticatedApp(settings, mode, directory=directory)
 
