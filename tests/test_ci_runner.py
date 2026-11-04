@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,13 +38,18 @@ if args[:2] == ['buildx', 'build']:
     if os.environ.get('FAIL_PHASE') == target + '-build': sys.exit(19)
     destination = args[args.index('--output') + 1].split('dest=', 1)[1]
     pathlib.Path(destination).write_text('synthetic image')
+    labels = dict(args[index + 1].split('=', 1) for index, value in enumerate(args) if value == '--label')
+    pathlib.Path(os.environ['FAKE_LABELS']).write_text(json.dumps(labels))
     print(json.dumps({'id':'deps', 'name':'RUN uv sync', 'cached':target=='worker',
                       'completed':'2026-01-01T00:00:01Z'}))
     print(json.dumps({'id':'export', 'name':'exporting to docker image format',
                       'started':'2026-01-01T00:00:01Z', 'completed':'2026-01-01T00:00:03Z'}))
 if args[:1] == ['load'] and os.environ.get('FAIL_PHASE') == 'load': sys.exit(20)
 if args[:2] == ['image', 'inspect']:
-    print('wrong' if os.environ.get('FAIL_PHASE') == 'architecture' else os.environ['FAKE_ARCH'])
+    if '.Config.Labels' in args[args.index('--format') + 1]:
+        print(pathlib.Path(os.environ['FAKE_LABELS']).read_text())
+    else:
+        print('wrong' if os.environ.get('FAIL_PHASE') == 'architecture' else os.environ['FAKE_ARCH'])
 if args[:1] == ['run']:
     entrypoint = args[args.index('--entrypoint') + 1]
     failure = os.environ.get('FAIL_PHASE')
@@ -53,7 +59,7 @@ if args[:2] == ['buildx', 'rm'] and os.environ.get('FAIL_PHASE') == 'builder-rem
 """
 
 FAKE_UV = r"""#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, subprocess, sys
 args = sys.argv[1:]
 with open(os.environ['FAKE_CALLS'], 'a') as output: output.write(json.dumps(args) + '\n')
 if 'pytest' in args:
@@ -61,9 +67,11 @@ if 'pytest' in args:
     pathlib.Path(report).write_text('<testsuite tests="1" failures="1"><testcase name="synthetic"><failure/></testcase></testsuite>')
 if os.environ.get('FAIL_UV') and os.environ['FAIL_UV'] in args: sys.exit(17)
 if args[:1] == ['build']:
-    pathlib.Path('dist').mkdir(exist_ok=True)
-    pathlib.Path('dist/synthetic-0.0.1.tar.gz').touch()
-    if not os.environ.get('OMIT_WHEEL'): pathlib.Path('dist/synthetic-0.0.1-py3-none-any.whl').touch()
+    subprocess.run([os.environ['REAL_UV'], *args], check=True)
+    if os.environ.get('OMIT_WHEEL'):
+        for path in pathlib.Path('dist').glob('*.whl'): path.unlink()
+elif args[:1] in (['venv'], ['pip']):
+    sys.exit(subprocess.call([os.environ['REAL_UV'], *args]))
 """
 
 
@@ -77,13 +85,25 @@ class RunnerTests(unittest.TestCase):
         for name, source in (
             ("docker", FAKE_DOCKER),
             ("uv", FAKE_UV),
-            ("git", "#!/bin/sh\nexit 0\n"),
+            ("git", "#!/bin/sh\nprintf '%s\\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"),
         ):
             path = self.bin / name
             path.write_text(source)
             path.chmod(0o755)
         (self.root / "Dockerfile").write_text("FROM synthetic\n")
-        (self.root / "pyproject.toml").write_text('[project]\nversion="0.0.1"\n')
+        (self.root / "pyproject.toml").write_text(
+            '[build-system]\nrequires=["hatchling>=1.27"]\nbuild-backend="hatchling.build"\n'
+            '[project]\nname="earnings-watch"\nversion="0.0.1"\n'
+            '[tool.hatch.build]\nartifacts=["src/earnings_watch/build_identity.json"]\n'
+            '[tool.hatch.build.targets.wheel]\npackages=["src/earnings_watch"]\n'
+        )
+        package = self.root / "src/earnings_watch"
+        package.mkdir(parents=True)
+        for name in ("__init__.py", "build_identity.py"):
+            shutil.copy2(ROOT / "src/earnings_watch" / name, package / name)
+        (self.root / "scripts").mkdir()
+        for name in ("stamp-build-identity.py", "check-build-identity.py"):
+            shutil.copy2(ROOT / "scripts" / name, self.root / "scripts" / name)
         (self.root / "uv.lock").write_text("synthetic")
         self.calls_path = self.root / "calls.jsonl"
         self.env = {
@@ -91,6 +111,9 @@ class RunnerTests(unittest.TestCase):
             "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
             "FAKE_CALLS": str(self.calls_path),
             "FAKE_ARCH": "amd64",
+            "FAKE_LABELS": str(self.root / "labels.json"),
+            "REAL_UV": shutil.which("uv"),
+            "UV_OFFLINE": "1",
             "FLEET_SHA": "a" * 40,
             "FLEET_VERSION": "",
             "FLEET_REF": "main",
@@ -103,6 +126,9 @@ class RunnerTests(unittest.TestCase):
             "PYTEST_ADDOPTS",
             "BLOCK_PHASE",
             "SLOW_CLEANUP",
+            "GITHUB_SHA",
+            "GITHUB_REF_TYPE",
+            "GITHUB_REF_NAME",
         ):
             self.env.pop(key, None)
 
@@ -268,7 +294,7 @@ spec.loader.exec_module(module)
 original = subprocess.Popen
 launched = []
 def spawn(command, **kwargs):
-    if not launched:
+    if not launched and command[0] == 'docker':
         child = original([sys.executable, '-c', 'import time; time.sleep(60)'], **kwargs)
         launched.append(child)
         pathlib.Path({str(child_pid)!r}).write_text(str(child.pid))

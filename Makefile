@@ -10,7 +10,7 @@ check:
 	uv run --locked mypy src
 	uv run --locked python scripts/check-boundaries.py
 	uv run --locked pytest -m 'not live' -q $(if $(JUNIT_XML),--junitxml=$(JUNIT_XML))
-	uv build --no-sources
+	python3 scripts/ci-package.py
 	git diff --check
 
 test:
