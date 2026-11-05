@@ -31,42 +31,51 @@ def main():
     for variable in ("FLEET_SHA", "GITHUB_SHA"):
         if os.environ.get(variable) and os.environ[variable] != sha:
             raise SystemExit(f"{variable} differs from the selected source SHA")
-    subprocess.run(
-        [
-            sys.executable,
-            str(root / "scripts/stamp-build-identity.py"),
-            "--root",
-            str(root),
-            "--revision",
-            sha,
-            "--version",
-            version,
-        ],
-        check=True,
-    )
-    # Eliminate stale distributions before building, without broad directory removal.
-    dist = Path("dist")
-    if dist.is_symlink():
-        raise SystemExit("Refusing a linked distribution directory")
-    for pattern in ("*.whl", "*.tar.gz"):
-        for artifact in dist.glob(pattern):
-            artifact.unlink()
-    subprocess.run(["uv", "build", "--no-sources"], check=True)
-    if not list(dist.glob("*.whl")) or not list(dist.glob("*.tar.gz")):
-        raise SystemExit("Package build did not produce both wheel and source distribution")
-    subprocess.run(
-        [
-            sys.executable,
-            str(root / "scripts/check-build-identity.py"),
-            "--dist",
-            str(dist),
-            "--revision",
-            sha,
-            "--version",
-            version,
-        ],
-        check=True,
-    )
+    identity = root / "src/earnings_watch/build_identity.json"
+    if identity.is_symlink():
+        raise SystemExit("Refusing a linked source build stamp")
+    previous = identity.read_bytes() if identity.exists() else None
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                str(root / "scripts/stamp-build-identity.py"),
+                "--root",
+                str(root),
+                "--revision",
+                sha,
+                "--version",
+                version,
+            ],
+            check=True,
+        )
+        dist = Path("dist")
+        if dist.is_symlink():
+            raise SystemExit("Refusing a linked distribution directory")
+        for pattern in ("*.whl", "*.tar.gz"):
+            for artifact in dist.glob(pattern):
+                artifact.unlink()
+        subprocess.run(["uv", "build", "--no-sources"], check=True)
+        if not list(dist.glob("*.whl")) or not list(dist.glob("*.tar.gz")):
+            raise SystemExit("Package build did not produce both wheel and source distribution")
+        subprocess.run(
+            [
+                sys.executable,
+                str(root / "scripts/check-build-identity.py"),
+                "--dist",
+                str(dist),
+                "--revision",
+                sha,
+                "--version",
+                version,
+            ],
+            check=True,
+        )
+    finally:
+        if previous is None:
+            identity.unlink(missing_ok=True)
+        else:
+            identity.write_bytes(previous)
 
 
 if __name__ == "__main__":

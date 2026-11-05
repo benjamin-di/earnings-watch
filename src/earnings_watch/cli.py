@@ -11,13 +11,26 @@ from pathlib import Path
 from typing import NoReturn
 from urllib.parse import urlsplit
 
-from .diagnostics import configure_logging, executable_diagnostics, write_error
+from .diagnostics import configure_logging, executable_diagnostics, write_error, failure_details
 from .errors import EarningsError
 
 
 class _ArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
-        write_error(EarningsError("invalid_argument", "invalid command arguments").envelope())
+        choices = [action for action in self._actions if action.choices is not None]
+        guidance = "; ".join(
+            f"{action.option_strings[0] if action.option_strings else action.dest}: "
+            + ", ".join(str(choice) for choice in (action.choices or ()))
+            for action in choices
+        )
+        write_error(
+            EarningsError(
+                "invalid_argument",
+                "invalid command arguments; use --help",
+                usage=self.format_usage().strip(),
+                choices=guidance,
+            ).envelope()
+        )
         self.exit(2)
 
 
@@ -495,19 +508,37 @@ def _main(argv: list[str] | None = None) -> int:
     except EarningsError as exc:
         write_error(exc.envelope())
         return 3 if exc.code == "temporarily_unavailable" else 1
-    except (ValueError, OSError, KeyError, yaml.YAMLError):
+    except (ValueError, OSError, KeyError, yaml.YAMLError) as error:
+        from pydantic import ValidationError
+        from .settings import Settings
+
+        invalid_fields = (
+            sorted(
+                {
+                    str(issue["loc"][0])
+                    for issue in error.errors(
+                        include_input=False, include_context=False, include_url=False
+                    )
+                    if issue["loc"] and issue["loc"][0] in Settings.model_fields
+                }
+            )
+            if isinstance(error, ValidationError)
+            else []
+        )
         write_error(
             EarningsError(
-                "invalid_argument", "invalid command arguments or configuration"
+                "invalid_argument",
+                "invalid command arguments or configuration; check --help and --config",
+                fields=invalid_fields,
             ).envelope()
         )
         return 1
     except DatabaseError:
-        error = EarningsError(
+        database_error = EarningsError(
             "temporarily_unavailable",
             "database unavailable; initialize it with `earnings-watch init` or retry",
         )
-        write_error(error.envelope())
+        write_error(database_error.envelope())
         return 3
 
 
@@ -522,7 +553,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as error:
             write_error(
                 EarningsError(
-                    "internal_error", "command failed", error_type=type(error).__name__
+                    "internal_error", "command failed", **failure_details(error)
                 ).envelope()
             )
             return 1

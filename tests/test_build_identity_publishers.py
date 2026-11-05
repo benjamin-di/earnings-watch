@@ -444,3 +444,23 @@ def test_resumed_public_package_publication_rechecks_downloaded_distributions():
     assert commands.index("gh release download") < commands.index("scripts/check-build-identity.py")
     assert '--dist dist --revision "$GITHUB_SHA" --version "${GITHUB_REF_NAME#v}"' in commands
     assert commands.index("scripts/check-build-identity.py") < commands.index("twine check")
+
+
+def test_package_gate_does_not_leave_a_source_stamp(source):
+    root, _ = source
+    identity = root / "src/earnings_watch/build_identity.json"
+    result = package(source, FLEET_SHA=REVISION, FLEET_VERSION=VERSION)
+    assert result.returncode == 0, result.stderr
+    assert not identity.exists()
+
+
+def test_failed_package_gate_restores_existing_source_stamp(source):
+    root, environment = source
+    identity = root / "src/earnings_watch/build_identity.json"
+    identity.write_text("synthetic-original-stamp")
+    command = root / "bin/uv"
+    command.write_text("#!/bin/sh\nexit 1\n")
+    command.chmod(0o755)
+    result = package((root, environment), FLEET_SHA=REVISION, FLEET_VERSION=VERSION)
+    assert result.returncode != 0
+    assert identity.read_text() == "synthetic-original-stamp"

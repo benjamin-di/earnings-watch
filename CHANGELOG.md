@@ -9,6 +9,8 @@
 
 ### Fixed
 
+- Retain safe CLI guidance and failure stack locations, and restore source stamps after package qualification.
+
 - Preserve native Rich render hooks, subclass print options and enclosing host capture during diagnostic attribution.
 
 ## [0.3.3] - 2026-11-04

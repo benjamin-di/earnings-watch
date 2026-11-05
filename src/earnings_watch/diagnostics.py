@@ -309,6 +309,25 @@ def configure_logging() -> None:
     logging.basicConfig(format="%(message)s")
 
 
+def failure_details(error: BaseException | None, trace=None) -> dict[str, Any]:
+    import traceback
+    from pathlib import Path
+
+    return {
+        "error_type": type(error).__name__ if error is not None else "unknown",
+        "traceback": [
+            {
+                "file": Path(frame.f_code.co_filename).name,
+                "function": frame.f_code.co_name,
+                "line": line,
+            }
+            for frame, line in traceback.walk_tb(
+                trace if trace is not None else getattr(error, "__traceback__", None)
+            )
+        ],
+    }
+
+
 def write_error(envelope: dict[str, Any]) -> None:
     """Keep CLI error envelopes machine-readable without logging raw inputs."""
     print(json.dumps(_with_identity(envelope), ensure_ascii=False), file=sys.stderr)
@@ -323,17 +342,32 @@ def executable_diagnostics() -> Iterator[None]:
     previous_warning = warnings.showwarning
 
     def uncaught(error_type, error, traceback):
-        logging.getLogger("earnings_watch").error("Uncaught failure (%s)", error_type.__name__)
+        logging.getLogger("earnings_watch").error(
+            json.dumps(
+                {
+                    "message": f"Uncaught failure ({error_type.__name__})",
+                    "logger": "earnings_watch",
+                    "level": "ERROR",
+                    **failure_details(error, traceback),
+                }
+            )
+        )
 
     def thread_failure(args):
         if args.exc_type is not SystemExit:
-            uncaught(args.exc_type, None, None)
+            uncaught(args.exc_type, args.exc_value, args.exc_traceback)
 
     def async_failure(loop, context):
         error = context.get("exception")
         logging.getLogger("asyncio").error(
-            "Unhandled asynchronous failure (%s)",
-            type(error).__name__ if error is not None else "unknown",
+            json.dumps(
+                {
+                    "message": "Unhandled asynchronous failure",
+                    "logger": "asyncio",
+                    "level": "ERROR",
+                    **failure_details(error),
+                }
+            )
         )
 
     def show_warning(message, category, filename, lineno, file=None, line=None):

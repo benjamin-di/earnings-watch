@@ -960,3 +960,38 @@ def test_actual_research_stdio_initialize_keeps_native_json_protocol(runtime):
     assert not {"service", "source_revision", "instance"} & response.keys()
     for line in result.stderr.splitlines():
         fields(json.loads(line))
+
+
+def test_parser_guidance_lists_fixed_choices_without_rejected_value(runtime):
+    result = run(
+        runtime,
+        "from earnings_watch.cli import main; raise SystemExit(main(['upcoming', '--format', 'private-sentinel']))",
+    )
+    assert result.returncode == 2
+    payload = json.loads(result.stderr)
+    assert "--format: table, json, ics" in payload["error"]["choices"]
+    assert "usage: earnings-watch upcoming" in payload["error"]["usage"]
+    assert "private-sentinel" not in result.stderr
+
+
+def test_asynchronous_failure_keeps_stack_origin_without_values(runtime):
+    result = run(
+        runtime,
+        """
+        import asyncio, gc
+        from earnings_watch.diagnostics import configure_logging, executable_diagnostics
+        configure_logging()
+        async def fail(): raise RuntimeError('private-sentinel')
+        async def run():
+            task = asyncio.create_task(fail())
+            await asyncio.sleep(.01)
+            del task
+            gc.collect()
+        with executable_diagnostics(): asyncio.run(run())
+    """,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stderr)
+    assert payload["error_type"] == "RuntimeError"
+    assert any(frame["function"] == "fail" and frame["line"] > 0 for frame in payload["traceback"])
+    assert "private-sentinel" not in result.stderr
