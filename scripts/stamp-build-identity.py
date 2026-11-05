@@ -13,7 +13,7 @@ import tomllib
 
 SERVICE = "earnings-watch"
 VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
-REVISION = re.compile(r"[0-9a-f]{40}\Z")
+REVISION = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 
 
 def stamp(root: Path, revision: str, version: str | None) -> None:
@@ -32,7 +32,7 @@ def stamp(root: Path, revision: str, version: str | None) -> None:
         raise ValueError("the expected version differs from the selected source")
     if not package.is_dir() or (target.exists() and not target.is_file()):
         raise ValueError("the package identity destination is not a regular file path")
-    value = {"schema": 1, "service": SERVICE, "version": product, "revision": revision}
+    value = {"schema": 1, "service": SERVICE, "version": product, "source_revision": revision}
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(

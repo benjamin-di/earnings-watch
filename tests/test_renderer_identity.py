@@ -18,6 +18,11 @@ class Footer(HTMLParser):
         self.identities = []
         self.text = []
         self.in_footer = False
+        self.in_summary = False
+        self.in_code = False
+        self.summary = []
+        self.code = []
+        self.details = 0
         self.feed(source)
 
     def handle_starttag(self, tag, attrs):
@@ -26,11 +31,24 @@ class Footer(HTMLParser):
             self.identities.append(attrs)
             self.in_footer = True
 
+        if self.in_footer:
+            self.in_summary = tag == "summary" or self.in_summary
+            self.in_code = tag == "code" or self.in_code
+            self.details += tag == "details"
+
     def handle_data(self, data):
         if self.in_footer:
             self.text.append(data)
+            if self.in_summary:
+                self.summary.append(data)
+            if self.in_code:
+                self.code.append(data)
 
     def handle_endtag(self, tag):
+        if tag == "summary":
+            self.in_summary = False
+        if tag == "code":
+            self.in_code = False
         if tag == "footer":
             self.in_footer = False
 
@@ -51,13 +69,19 @@ def assert_footer(source, build):
     attrs = footer.identities[0]
     assert attrs["data-service"] == build.service
     assert attrs["data-version"] == build.version
-    assert attrs["data-source-revision"] == build.revision
-    assert attrs["title"] == "Source revision: " + build.revision
-    assert "".join(footer.text) == f"{build.service} v{build.version} · {build.short_revision}"
+    assert attrs["data-source-revision"] == build.source_revision
+    assert attrs["title"] == "Source revision: " + build.source_revision
+    assert "".join(footer.summary) == f"{build.service} v{build.version} · {build.short_revision}"
+    assert footer.details == 1
+    assert "".join(footer.code) == build.source_revision
+    assert "Source revision: " in "".join(footer.text)
     assert "user-select:text" in source
 
 
-def test_owned_page_has_one_selectable_host_footer(build):
+@pytest.mark.parametrize("revision", ["a" * 40, "b" * 64, "unknown"])
+def test_owned_page_has_one_selectable_host_footer(build, monkeypatch, revision):
+    build = BuildIdentity(build.service, build.version, revision)
+    monkeypatch.setattr(ui, "BUILD", build)
     body = '<form method="post" action="/connections/watch"><input name="ticker"></form>'
     result = ui.page("Your companies", body, intro="Your choices")
     assert body in result
@@ -76,7 +100,7 @@ def test_legacy_renderer_uses_trusted_body_without_new_keywords(build, monkeypat
     monkeypatch.setattr(ui.renderer, "page", legacy_page)
     result = ui.page("Example", "<p>Owned content</p>")
     assert len(calls) == 1
-    assert calls[0].startswith("<p>Owned content</p><footer")
+    assert calls[0].startswith("<p>Owned content</p><style>")
     assert_footer(result, build)
 
 
@@ -113,7 +137,7 @@ def test_optional_identity_requires_explicit_factory_support(build, monkeypatch)
     assert (identity.service, identity.version, identity.source_revision) == (
         build.service,
         build.version,
-        build.revision,
+        build.source_revision,
     )
     assert ui.renderer_options(old) == {}
     assert ui.renderer_options(variadic) == {}
@@ -134,7 +158,7 @@ def test_configured_browser_auth_forwards_host_identity_when_supported(settings,
         assert (identity.service, identity.version, identity.source_revision) == (
             build.service,
             build.version,
-            build.revision,
+            build.source_revision,
         )
     else:
         assert not hasattr(auth, "page_identity")
@@ -233,7 +257,10 @@ async def test_every_owned_html_outcome_keeps_status_and_one_footer(
             assert (await client.get("/connections/")).status_code == 200
             response = await client.post(
                 "/connections/import-preview",
-                data={"revision": "-1" if outcome == "conflict" else "0", "companies": "ALPHA"},
+                data={
+                    "revision": "-1" if outcome == "conflict" else "0",
+                    "companies": "ALPHA",
+                },
                 headers={"Origin": "http://localhost"},
             )
     assert response.status_code == status, response.text

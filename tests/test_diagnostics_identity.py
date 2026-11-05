@@ -21,8 +21,21 @@ def runtime(tmp_path):
     shutil.copytree(Path(__file__).parents[1] / "src" / "earnings_watch", target)
     (target / "build_identity.json").write_text(
         json.dumps(
-            {"schema": 1, "service": "earnings-watch", "version": "1.2.3", "revision": REVISION}
+            {
+                "schema": 1,
+                "service": "earnings-watch",
+                "version": "1.2.3",
+                "source_revision": REVISION,
+            }
         )
+    )
+    metadata = tmp_path / "earnings_watch-1.2.3.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: earnings-watch\nVersion: 1.2.3\n"
+    )
+    (metadata / "direct_url.json").write_text(
+        json.dumps({"url": "file:///synthetic", "dir_info": {"editable": True}})
     )
     return tmp_path
 
@@ -53,7 +66,8 @@ def run(runtime, code, *, input=None):
 def fields(payload):
     assert payload["service"] == "earnings-watch"
     assert payload["version"] == "1.2.3"
-    assert payload["revision"] == REVISION
+    assert payload["source_revision"] == REVISION
+    assert "revision" not in payload
     assert str(UUID(payload["instance"])) == payload["instance"]
 
 
@@ -338,7 +352,7 @@ def test_rich_delivery_retains_subclass_print_arguments_styles_and_plain_record_
         lines = retained.splitlines(keepends=True)
         assert lines[0] == 'host prefix\\n' and lines[-1] == 'host suffix\\n'
         line = ''.join(lines[1:-1])
-        assert line.startswith('service=earnings-watch version=1.2.3 revision=')
+        assert line.startswith('service=earnings-watch version=1.2.3 source_revision=')
         assert line.endswith(' ' + native), (line, native)
         assert stream.getvalue() == ''
         handler.handle(record)
@@ -375,7 +389,7 @@ def test_rich_terminal_record_keeps_styles_independent_of_output_color_policy(ru
         stream.seek(0); stream.truncate()
         configure_logging()
         handler.handle(record)
-        header = ('service=earnings-watch version=1.2.3 revision=' + 'a' * 40
+        header = ('service=earnings-watch version=1.2.3 source_revision=' + 'a' * 40
                   + ' instance=' + process_instance() + ' ')
         assert stream.getvalue() == header + native_output
         assert console.export_text(styles=True) == header + native_record
@@ -454,7 +468,7 @@ def test_rich_live_keeps_native_cursor_controls_and_host_status(runtime):
             stream.seek(0); stream.truncate(); console.export_text()
             configure_logging()
             handler.handle(record)
-            header = ('service=earnings-watch version=1.2.3 revision=' + 'a' * 40
+            header = ('service=earnings-watch version=1.2.3 source_revision=' + 'a' * 40
                       + ' instance=' + process_instance() + ' ')
             assert '\\r\\x1b[2K' in native_output
             expected = native_output.replace('retained diagnostic', header + 'retained diagnostic', 1)
@@ -531,7 +545,9 @@ def test_tty_attribution_preserves_native_lines_after_standard_and_rich_renderin
     for original, attributed in zip(baseline, retained):
         assert len(original.splitlines()) == len(attributed.splitlines())
         for native, line in zip(original.splitlines(), attributed.splitlines()):
-            assert line.startswith(f"service=earnings-watch version=1.2.3 revision={REVISION} ")
+            assert line.startswith(
+                f"service=earnings-watch version=1.2.3 source_revision={REVISION} "
+            )
             assert " instance=" in line and line.endswith(" " + native)
 
 
@@ -762,7 +778,7 @@ def test_actual_cli_help_and_success_json_are_unchanged(runtime):
     decoder = json.JSONDecoder()
     initialized, end = decoder.raw_decode(result.stdout)
     assert initialized["ok"] is True and initialized["state"] == "initialized"
-    assert not {"service", "version", "revision", "instance"} & initialized.keys()
+    assert not {"service", "version", "source_revision", "instance"} & initialized.keys()
     assert json.loads(result.stdout[end:]) == {"events": []}
 
 
@@ -802,21 +818,22 @@ def test_invalid_configuration_is_sanitized_at_actual_cli_boundary(runtime):
     assert payload["error"]["code"] == "invalid_argument"
 
 
-def test_missing_build_metadata_stays_unknown_despite_runtime_relabel(runtime):
+def test_missing_build_stamp_keeps_product_version_despite_runtime_relabel(runtime):
     (runtime / "earnings_watch" / "build_identity.json").unlink()
     result = run(
         runtime,
         """
         from earnings_watch import __version__
         from earnings_watch.cli import main
-        assert __version__ == 'unknown'
+        assert __version__ == '1.2.3'
         raise SystemExit(main(['--bad']))
     """,
     )
     assert result.returncode == 2 and result.stdout == ""
     payload = json.loads(result.stderr)
     assert payload["service"] == "earnings-watch"
-    assert payload["version"] == payload["revision"] == "unknown"
+    assert payload["version"] == "1.2.3"
+    assert payload["source_revision"] == "unknown"
     assert str(UUID(payload["instance"])) == payload["instance"]
 
 
@@ -940,6 +957,6 @@ def test_actual_research_stdio_initialize_keeps_native_json_protocol(runtime):
     response = json.loads(result.stdout)
     assert response["id"] == 1
     assert response["result"]["serverInfo"] == {"name": "Earnings Research", "version": "1.2.3"}
-    assert not {"service", "revision", "instance"} & response.keys()
+    assert not {"service", "source_revision", "instance"} & response.keys()
     for line in result.stderr.splitlines():
         fields(json.loads(line))

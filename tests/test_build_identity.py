@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / "src" / "earnings_watch" / "build_identity.py"
 STAMP = ROOT / "scripts" / "stamp-build-identity.py"
 REVISION = "a" * 40
-VALUE = {"schema": 1, "service": "earnings-watch", "version": "0.3.3", "revision": REVISION}
+VALUE = {"schema": 1, "service": "earnings-watch", "version": "0.3.3", "source_revision": REVISION}
 
 
 @pytest.fixture
@@ -28,6 +28,14 @@ def source(tmp_path):
     (package / "__init__.py").write_text('"""Synthetic package for the real reader."""\n')
     shutil.copy2(MODULE, package / "build_identity.py")
     (root / "pyproject.toml").write_text('[project]\nname = "earnings-watch"\nversion = "0.3.3"\n')
+    metadata = root / "src" / "earnings_watch-0.3.3.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: earnings-watch\nVersion: 0.3.3\n"
+    )
+    (metadata / "direct_url.json").write_text(
+        json.dumps({"url": "file:///synthetic", "dir_info": {"editable": True}})
+    )
     return root
 
 
@@ -38,7 +46,7 @@ def run_stamp(source, *, revision=REVISION, version=None):
     return subprocess.run(command, capture_output=True, text=True, timeout=30)
 
 
-def probe(source, body=None):
+def probe(source, body=None, *, expected_error=None):
     if body is None:
         body = """
 from earnings_watch.build_identity import BUILD, process_instance
@@ -64,6 +72,11 @@ print(json.dumps({**BUILD.as_dict(), "short": BUILD.short_revision,
         env=environment,
         timeout=30,
     )
+    if expected_error is not None:
+        assert process.returncode != 0
+        assert expected_error in process.stderr
+        assert process.stdout == ""
+        return
     assert process.returncode == 0, process.stderr
     assert process.stderr == ""
     return json.loads(process.stdout)
@@ -80,8 +93,8 @@ def test_real_stamp_and_isolated_reader_reject_runtime_relabeling(source):
     assert json.loads(manifest(source).read_text()) == VALUE
     first, second = probe(source), probe(source)
     for value in (first, second):
-        assert {key: value[key] for key in ("service", "version", "revision")} == {
-            key: VALUE[key] for key in ("service", "version", "revision")
+        assert {key: value[key] for key in ("service", "version", "source_revision")} == {
+            key: VALUE[key] for key in ("service", "version", "source_revision")
         }
         assert value["short"] == REVISION[:12]
         assert value["instance"] == value["again"]
@@ -116,7 +129,7 @@ else:
 print(json.dumps({{**BUILD.as_dict(), "instance": first}}))
 """,
     )
-    assert value["version"] == "0.3.3" and value["revision"] == REVISION
+    assert value["version"] == "0.3.3" and value["source_revision"] == REVISION
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a fork-capable platform")
@@ -150,13 +163,12 @@ print(json.dumps({"parent": parent, "child": result}))
     child = value["child"]
     assert child["instance"] == child["again"] == child["eager"]
     assert child["instance"] != value["parent"]
-    assert child["build"]["revision"] == REVISION
+    assert child["build"]["source_revision"] == REVISION
 
 
 @pytest.mark.parametrize(
     "content",
     [
-        None,
         b"\xff",
         "{",
         "null",
@@ -172,23 +184,66 @@ print(json.dumps({"parent": parent, "child": result}))
         json.dumps(VALUE).replace(REVISION, "a" * 39),
         json.dumps(VALUE).replace(REVISION, " " + REVISION),
         json.dumps(VALUE | {"extra": "not admitted"}),
-        json.dumps({key: item for key, item in VALUE.items() if key != "revision"}),
-        json.dumps(VALUE | {"revision": [REVISION]}),
+        json.dumps({key: item for key, item in VALUE.items() if key != "source_revision"}),
+        json.dumps(VALUE | {"source_revision": [REVISION]}),
         json.dumps(VALUE)[:-1] + ', "version": "9.9.9"}',
         json.dumps(VALUE)[:-1] + ', "schema": 1}',
         "[" * 2000 + "]" * 2000,
         " " * 16385,
     ],
 )
-def test_unavailable_or_unadmitted_manifest_never_guesses_identity(source, content):
+def test_invalid_manifest_is_refused(source, content):
     if isinstance(content, bytes):
         manifest(source).write_bytes(content)
     elif content is not None:
         manifest(source).write_text(content)
+    probe(source, expected_error="Application build identity conflicts with the installed package")
+
+
+def test_unstamped_source_keeps_product_version_and_unknown_revision(source):
     value = probe(source)
     assert value["service"] == "earnings-watch"
-    assert value["version"] == value["revision"] == value["short"] == "unknown"
+    assert value["version"] == "0.3.3"
+    assert value["source_revision"] == value["short"] == "unknown"
     assert UUID(value["instance"]).version == 4
+
+
+def test_unstamped_noneditable_install_is_refused(source):
+    (source / "src/earnings_watch-0.3.3.dist-info/direct_url.json").unlink()
+    probe(source, expected_error="Missing application build identity in installed package")
+
+
+def test_stale_stamp_conflicting_with_installed_version_is_refused(source):
+    assert run_stamp(source).returncode == 0
+    metadata = source / "src/earnings_watch-0.3.3.dist-info/METADATA"
+    metadata.write_text("Metadata-Version: 2.1\nName: earnings-watch\nVersion: 0.3.4\n")
+    probe(source, expected_error="Application build identity conflicts with the installed package")
+
+
+def test_source_without_installed_metadata_reads_selected_project_version(source):
+    value = probe(
+        source,
+        """
+import importlib.metadata
+original = importlib.metadata.distribution
+def selected(name):
+    if name == 'earnings-watch':
+        raise importlib.metadata.PackageNotFoundError(name)
+    return original(name)
+importlib.metadata.distribution = selected
+from earnings_watch.build_identity import BUILD
+print(json.dumps(BUILD.as_dict()))
+""",
+    )
+    assert value == {"service": "earnings-watch", "version": "0.3.3", "source_revision": "unknown"}
+
+
+@pytest.mark.parametrize("revision", ["a" * 40, "b" * 64])
+def test_full_supported_revisions_round_trip(source, revision):
+    assert run_stamp(source, revision=revision).returncode == 0
+    value = probe(source)
+    assert value["source_revision"] == revision
+    assert value["short"] == revision[:12]
 
 
 @pytest.mark.parametrize("revision", ["unknown", "A" * 40, "a" * 39, "a" * 41, " " + REVISION])

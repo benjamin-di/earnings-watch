@@ -24,9 +24,9 @@ from earnings_watch.build_identity import BUILD, process_instance
 expected = json.loads(sys.argv[1])
 assert Path(earnings_watch.__file__).is_relative_to(Path(sys.prefix)), 'source tree imported'
 assert json.loads(files('earnings_watch').joinpath('build_identity.json').read_text()) == expected
-assert BUILD.as_dict() == {key: expected[key] for key in ('service', 'version', 'revision')}
+assert BUILD.as_dict() == {key: expected[key] for key in ('service', 'version', 'source_revision')}
 assert version('earnings-watch') == earnings_watch.__version__ == BUILD.version
-assert BUILD.short_revision == expected['revision'][:12]
+assert BUILD.short_revision == expected['source_revision'][:12]
 instance = process_instance()
 assert UUID(instance).version == 4 and process_instance() == instance
 print(json.dumps({**BUILD.as_dict(), 'instance': instance}))
@@ -34,11 +34,16 @@ print(json.dumps({**BUILD.as_dict(), 'instance': instance}))
 
 
 def expected_identity(revision, version):
-    if not re.fullmatch(r"[0-9a-f]{40}", revision) or not re.fullmatch(
+    if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", revision) or not re.fullmatch(
         r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version
     ):
         raise ValueError("expected a full source SHA and stable product version")
-    return {"schema": 1, "service": "earnings-watch", "version": version, "revision": revision}
+    return {
+        "schema": 1,
+        "service": "earnings-watch",
+        "version": version,
+        "source_revision": revision,
+    }
 
 
 def check_installed(python, expected, directory):
@@ -70,8 +75,8 @@ def check_installed(python, expected, directory):
         if result.stderr:
             raise ValueError("installed identity probe wrote to stderr")
         value = json.loads(result.stdout)
-        if {key: value[key] for key in ("service", "version", "revision")} != {
-            key: expected[key] for key in ("service", "version", "revision")
+        if {key: value[key] for key in ("service", "version", "source_revision")} != {
+            key: expected[key] for key in ("service", "version", "source_revision")
         }:
             raise ValueError("installed identity differs from the producing source")
         instances.append(value["instance"])

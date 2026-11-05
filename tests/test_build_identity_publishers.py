@@ -19,7 +19,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "a" * 40
 VERSION = "0.3.3"
-VALUE = {"schema": 1, "service": "earnings-watch", "version": VERSION, "revision": REVISION}
+VALUE = {"schema": 1, "service": "earnings-watch", "version": VERSION, "source_revision": REVISION}
 
 
 def source_tree(tmp_path):
@@ -168,7 +168,7 @@ def test_installed_acceptance_refuses_a_lost_or_replaced_stamp(published_distrib
         capture_output=True,
     )
     (manifest,) = venv.glob("lib/python*/site-packages/earnings_watch/build_identity.json")
-    for value in (None, VALUE | {"revision": "b" * 40}):
+    for value in (None, VALUE | {"source_revision": "b" * 40}):
         if value is None:
             manifest.unlink()
         else:
@@ -224,7 +224,7 @@ def test_native_images_refuse_mismatched_inputs_before_starting_docker(source, e
         ("wheel", "wrong"),
         ("sdist", "missing"),
         ("sdist", "wrong"),
-        ("expected", "revision"),
+        ("expected", "source_revision"),
         ("expected", "version"),
     ],
 )
@@ -234,7 +234,7 @@ def test_distribution_acceptance_rejects_missing_or_inconsistent_identity(
     (root, environment), _ = distributions
     revision, version = REVISION, VERSION
     if kind == "expected":
-        if change == "revision":
+        if change == "source_revision":
             revision = "b" * 40
         else:
             version = "0.3.4"
@@ -251,7 +251,8 @@ def test_distribution_acceptance_rejects_missing_or_inconsistent_identity(
                 archive.writestr(item, content)
             if change == "wrong":
                 archive.writestr(
-                    "earnings_watch/build_identity.json", json.dumps(VALUE | {"revision": "b" * 40})
+                    "earnings_watch/build_identity.json",
+                    json.dumps(VALUE | {"source_revision": "b" * 40}),
                 )
     else:
         (artifact,) = (root / "dist").glob("*.tar.gz")
