@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0] - 2026-11-23
 
 ### Added
 
@@ -9,9 +9,17 @@
 
 ### Fixed
 
+- Remove internal side-effect prefixes (`R0.`/`R1.`) from MCP tool descriptions and add explicit tool titles, parameter descriptions, enum literals, and lean input schemas across all ten MCP tools.
+- Return MCP tool errors with `isError: true` while preserving the closed JSON error envelope.
 - Retain safe CLI guidance and failure stack locations, and restore source stamps after package qualification.
-
 - Preserve native Rich render hooks, subclass print options and enclosing host capture during diagnostic attribution.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.3.3; no schema change.
+
+[0.4.0]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.4.0
 
 ## [0.3.3] - 2026-11-04
 

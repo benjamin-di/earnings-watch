@@ -1,3 +1,4 @@
+import json
 import sys
 import httpx
 import pytest
@@ -29,8 +30,9 @@ async def test_mcp_tools_prompts_resource_and_readonly_annotations(seeded):
         assert len(await client.list_prompts()) == 3
         resource = await client.read_resource("earnings://upcoming.ics")
         assert "BEGIN:VCALENDAR" in resource[0].text
-        result = await client.call_tool("earnings_upcoming", {"days": 91})
-        assert result.data["error"]["code"] == "invalid_argument"
+        result = await client.call_tool("earnings_upcoming", {"days": 91}, raise_on_error=False)
+        assert result.is_error is True
+        assert json.loads(result.content[0].text)["error"]["code"] == "invalid_argument"
 
 
 async def test_stdio_wire(seeded):

@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
 
 import pytest
@@ -18,7 +19,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "a" * 40
-VERSION = "0.3.3"
+VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+WRONG_VERSION = "0.0.1"
 VALUE = {"schema": 1, "service": "earnings-watch", "version": VERSION, "source_revision": REVISION}
 
 
@@ -237,7 +239,7 @@ def test_distribution_acceptance_rejects_missing_or_inconsistent_identity(
         if change == "source_revision":
             revision = "b" * 40
         else:
-            version = "0.3.4"
+            version = WRONG_VERSION
     elif kind == "wheel":
         (artifact,) = (root / "dist").glob("*.whl")
         with zipfile.ZipFile(artifact) as archive:
@@ -265,7 +267,9 @@ def test_distribution_acceptance_rejects_missing_or_inconsistent_identity(
                     # Change another required field without changing archive layout.
                     stream = original.extractfile(member)
                     assert stream is not None
-                    content = stream.read().replace(b'"0.3.3"', b'"0.3.4"')
+                    content = stream.read().replace(
+                        f'"{VERSION}"'.encode(), f'"{WRONG_VERSION}"'.encode()
+                    )
                     member.size = len(content)
                     output.addfile(member, io.BytesIO(content))
                 else:
@@ -398,13 +402,13 @@ def test_public_image_acceptance_checks_candidate_digest_and_source_labels(tmp_p
     (tmp_path / "digests/earnings-watch-worker").write_text("sha256:" + "1" * 64)
     calls = tmp_path / "calls.jsonl"
     docker = tmp_path / "docker"
-    docker.write_text("""#!/usr/bin/env python3
+    docker.write_text(f"""#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ['CALLS'], 'a') as output: output.write(json.dumps(sys.argv[1:]) + '\\n')
 if sys.argv[1:3] == ['image', 'inspect']:
-    print(json.dumps({'org.opencontainers.image.source': 'https://github.com/example/earnings-watch',
+    print(json.dumps({{'org.opencontainers.image.source': 'https://github.com/example/earnings-watch',
                       'org.opencontainers.image.revision': os.environ['LABEL_SHA'],
-                      'org.opencontainers.image.version': '0.3.3'}))
+                      'org.opencontainers.image.version': {VERSION!r}}}))
 """)
     docker.chmod(0o755)
     result = subprocess.run(

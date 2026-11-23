@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tomllib
 from uuid import UUID
 import zipfile
 
@@ -303,8 +304,10 @@ def test_stamper_refuses_linked_input_or_destination(source, tmp_path, selected)
 def test_hatch_includes_the_ignored_generated_manifest_in_wheel_and_sdist(source, tmp_path):
     for name in ("pyproject.toml", ".gitignore", "README.md", "LICENSE", "NOTICE"):
         shutil.copy2(ROOT / name, source / name)
+    expected_version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    expected = VALUE | {"version": expected_version}
     subprocess.run(["git", "init", "--quiet", str(source)], check=True, capture_output=True)
-    assert run_stamp(source).returncode == 0
+    assert run_stamp(source, version=expected_version).returncode == 0
     ignored = subprocess.run(
         ["git", "-C", str(source), "check-ignore", "src/earnings_watch/build_identity.json"],
         check=True,
@@ -323,7 +326,7 @@ def test_hatch_includes_the_ignored_generated_manifest_in_wheel_and_sdist(source
     wheel, sdist = list(dist.glob("*.whl")), list(dist.glob("*.tar.gz"))
     assert len(wheel) == len(sdist) == 1
     with zipfile.ZipFile(wheel[0]) as archive:
-        assert json.loads(archive.read("earnings_watch/build_identity.json")) == VALUE
+        assert json.loads(archive.read("earnings_watch/build_identity.json")) == expected
     with tarfile.open(sdist[0]) as archive:
         members = [
             item for item in archive.getmembers() if item.name.endswith("/build_identity.json")
@@ -331,4 +334,4 @@ def test_hatch_includes_the_ignored_generated_manifest_in_wheel_and_sdist(source
         assert len(members) == 1
         stream = archive.extractfile(members[0])
         assert stream is not None
-        assert json.load(stream) == VALUE
+        assert json.load(stream) == expected
