@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.1] - 2026-11-23
+
+### Fixed
+
+- Pass `--platform "linux/$ARCH"` to `docker image inspect` in the release smoke job so multi-arch `arm64` OCI label verification reads the pulled platform manifest on Docker Engine 29+.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.4.0 and 0.3.3; no schema change.
+
+[0.4.1]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.4.1
+
 ## [0.4.0] - 2026-11-23
 
 ### Added

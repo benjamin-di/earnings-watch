@@ -112,7 +112,7 @@ jobs:
           digest="$(cat 'digests/${{ matrix.image }}')"
           version="${GITHUB_REF_NAME#v}"
           docker run --rm --platform "linux/$ARCH" --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /data:uid=1000,gid=1000,mode=0700 --tmpfs /tmp --entrypoint sh "$IMAGE@$digest" -c 'earnings-watch init && earnings-watch doctor && earnings-watch upcoming --format json && python -I /usr/local/bin/check-build-identity.py --revision "$1" --version "$2"' sh "$EXPECTED_SHA" "$version"
-          docker image inspect --format '{{json .Config.Labels}}' "$IMAGE@$digest" > labels.json
+          docker image inspect --platform "linux/$ARCH" --format '{{json .Config.Labels}}' "$IMAGE@$digest" > labels.json
           python3 - <<'PY'
           import json, os
           from pathlib import Path
