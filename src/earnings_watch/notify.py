@@ -31,6 +31,11 @@ class WebhookNotifier:
         return key
 
 
+def _parse_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def timing_signature(event):
     return tuple(
         event.get(k) for k in ("date", "release_time", "release_tz", "timing_issue", "status")
@@ -94,10 +99,19 @@ def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str
             dict(r) | {"doc": json.loads(r["doc"])}
             for r in db.execute("SELECT * FROM event_revisions WHERE seq>? ORDER BY seq", (cursor,))
         ]
-    recent_docs = [d for d in documents if d["first_seen"] > cutoff]
+    cutoff_at = _parse_timestamp(cutoff)
+    brief_cutoff_at = _parse_timestamp(brief_cutoff)
+    recent_docs = [d for d in documents if _parse_timestamp(d["first_seen"]) > cutoff_at]
+    pre_cutoff_released = {
+        d["event_id"]
+        for d in documents
+        if d["role"] == "release" and _parse_timestamp(d["first_seen"]) <= cutoff_at
+    }
     result: list[tuple[str, str, dict]] = []
     if pref["settings"]["results"]:
         for event in events:
+            if event["id"] in pre_cutoff_released:
+                continue
             docs = [d for d in recent_docs if d["event_id"] == event["id"]]
             if not any(d["role"] == "release" for d in docs):
                 continue
@@ -171,7 +185,7 @@ def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str
         and not any(r["kind"] == "brief" and r["state"] == "unknown" for r in deliveries.values())
     ):
         upcoming = [e for e in events if str(today) <= e["date"] <= str(today + timedelta(days=1))]
-        brief_docs = [d for d in documents if d["first_seen"] > brief_cutoff]
+        brief_docs = [d for d in documents if _parse_timestamp(d["first_seen"]) > brief_cutoff_at]
         if upcoming or changes or brief_docs:
             result.append(
                 (

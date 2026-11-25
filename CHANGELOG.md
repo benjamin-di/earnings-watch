@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.2] - 2026-11-25
+
+### Fixed
+
+- Prevent `notify.notices()` from enqueueing a fresh `:initial` results notification when an event already has a verified release document recorded at or before the subscriber's baseline cutoff, and compare timestamps as UTC instants rather than raw strings.
+- Seed `suppressed_by_migration` markers in `archive_effects()` for legacy events with `results_emailed_at` so later document discovery cannot re-send pre-migration results without claiming a native `sent` delivery.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.4.1, 0.4.0, and 0.3.3; no schema change.
+
+[0.4.2]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.4.2
+
 ## [0.4.1] - 2026-11-23
 
 ### Fixed

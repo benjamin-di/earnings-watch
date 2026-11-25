@@ -207,3 +207,118 @@ async def test_operator_reconciliation_refuses_an_inflight_native_send(seeded):
     with delivery_lock(seeded.db, "alice"):
         with pytest.raises(EarningsError, match="still running"):
             reconcile(seeded.db, "alice", key, {})
+
+
+def test_pre_cutoff_release_prevents_initial_notice_for_later_mirror_document(seeded):
+    subscribe(seeded)
+    cutoff = datetime.now(timezone.utc)
+    with connect(seeded.db, write=True) as db:
+        db.execute(
+            "INSERT OR REPLACE INTO metadata VALUES(?,?)",
+            ("baseline:alice", cutoff.isoformat()),
+        )
+    # Pre-cutoff verified release using trailing Z timestamp format.
+    pre_cutoff = (cutoff - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    Catalogue(seeded.db).put_document(
+        dict(
+            id="alpha-sec-release",
+            event_id=event().id,
+            url="https://issuer.example/sec-release.htm",
+            title="Alpha Q3 Release",
+            role="release",
+            verified=True,
+            sha256="",
+            first_seen=pre_cutoff,
+        )
+    )
+    # Post-cutoff mirror release on issuer newsroom must not trigger a fresh :initial notice.
+    put_doc(seeded, "alpha-ir-mirror", role="release", at=cutoff + timedelta(minutes=30))
+    assert not [n for n in notices(seeded, "alice") if n[1] == "results"]
+
+    # Another event with only a pre-cutoff non-release document still fires :initial once its release arrives.
+    catalogue = Catalogue(seeded.db)
+    catalogue.put_source(source("beta", "BETA"))
+    beta_event = event("beta", "BETA")
+    catalogue.commit_issuer("beta", [beta_event], run_id="beta")
+    open(seeded, "alice").watch("BETA")
+    catalogue.put_document(
+        dict(
+            id="beta-pre-slides",
+            event_id=beta_event.id,
+            url="https://issuer.example/beta-slides.pdf",
+            title="Beta Slides",
+            role="presentation",
+            verified=True,
+            sha256="",
+            first_seen=pre_cutoff,
+        )
+    )
+    catalogue.put_document(
+        dict(
+            id="beta-release",
+            event_id=beta_event.id,
+            url="https://issuer.example/beta-release.pdf",
+            title="Beta Release",
+            role="release",
+            verified=True,
+            sha256="",
+            first_seen=(cutoff + timedelta(minutes=30)).isoformat(),
+        )
+    )
+    result_keys = [n[0] for n in notices(seeded, "alice") if n[1] == "results"]
+    assert result_keys == [f"results:{beta_event.id}:initial"]
+
+
+async def test_archive_effects_suppresses_legacy_emailed_results_without_claiming_sent(
+    tmp_path,
+):
+    import yaml
+    from earnings_watch.legacy import import_snapshot, review
+    from earnings_watch.settings import Settings
+    from earnings_watch.store.accounts import archive_effects, provision
+    from earnings_watch.store.database import initialize
+
+    settings = Settings(data_dir=tmp_path / "state")
+    initialize(settings.db)
+    provision(settings.db, "alice", "Alice")
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    (legacy_dir / "ir-sources.yaml").write_text(
+        yaml.safe_dump({"sources": [source("alpha", "ALPHA").model_dump(mode="json")]})
+    )
+    emailed_event = event().model_dump(mode="json") | {
+        "status": "past",
+        "results_emailed_at": "2026-11-17T21:29:03Z",
+        "results_links": [],
+    }
+    (legacy_dir / "events.yaml").write_text(yaml.safe_dump({"events": [emailed_event]}))
+    import_snapshot(settings.db, legacy_dir, "alice")
+    snapshot_sha = review(settings.db, "alice")["snapshot_sha256"]
+    archive_effects(
+        settings.db,
+        "alice",
+        {
+            "evidence": "Legacy container stopped",
+            "legacy_writer_stopped": True,
+            "snapshot_sha256": snapshot_sha,
+        },
+    )
+    key = f"results:{event().id}:initial"
+    with connect(settings.db) as db:
+        row = db.execute(
+            "SELECT state FROM deliveries WHERE person='alice' AND key=?", (key,)
+        ).fetchone()
+    assert row is not None and row[0] == "suppressed_by_migration"
+
+    # A verified release document discovered after migration must not trigger a duplicate initial email.
+    put_doc(
+        settings,
+        "alpha-post-migration-mirror",
+        role="release",
+        at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    assert not [n for n in notices(settings, "alice") if n[1] == "results"]
+    prepare(settings)
+    sender = Recorder()
+    assert (await deliver(settings.db, "alice", sender)) == {"sent": [], "unknown": []}
+    assert sender.calls == []

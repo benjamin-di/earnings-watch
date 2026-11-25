@@ -196,6 +196,29 @@ def archive_effects(path: Path, person: str, receipt: dict) -> dict:
             "UPDATE deliveries SET state='suppressed_by_migration' WHERE person=? AND key!='legacy-state' AND state='pending'",
             (person,),
         )
+        raw_events = payload.get("events", {})
+        legacy_events = raw_events.get("events", []) if isinstance(raw_events, dict) else raw_events
+        source_keys = {r["ticker"]: r["key"] for r in db.execute("SELECT ticker,key FROM sources")}
+        for legacy_event in legacy_events if isinstance(legacy_events, list) else []:
+            if not isinstance(legacy_event, dict) or not legacy_event.get("results_emailed_at"):
+                continue
+            event_type = legacy_event.get("type")
+            period = legacy_event.get("period")
+            issuer_key = legacy_event.get("issuer_key") or source_keys.get(
+                legacy_event.get("ticker", "")
+            )
+            if (
+                isinstance(event_type, str)
+                and isinstance(issuer_key, str)
+                and isinstance(period, str)
+                and event_type
+                and issuer_key
+                and period
+            ):
+                db.execute(
+                    "INSERT OR IGNORE INTO deliveries(person,key,kind,state,payload) VALUES(?,?,'results','suppressed_by_migration','{}')",
+                    (person, f"results:{event_type}:{issuer_key}:{period}:initial"),
+                )
         db.execute(
             "UPDATE people SET notify_seq=(SELECT coalesce(max(seq),0) FROM event_revisions) WHERE id=?",
             (person,),
