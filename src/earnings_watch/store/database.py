@@ -21,6 +21,7 @@ from earnings_watch.symbols import (
     is_valid_exchange,
     is_valid_isin,
     is_valid_ticker,
+    normalize_exchange,
     parse_symbol,
     validate_ir_url,
 )
@@ -524,7 +525,7 @@ class PersonalStore:
         revision: int | None = None,
     ) -> Row:
         raw_input = ticker.strip()
-        explicit_exchange = exchange.strip().upper()
+        explicit_exchange = normalize_exchange(exchange)
         if explicit_exchange and not is_valid_exchange(explicit_exchange):
             raise EarningsError("invalid_argument", "invalid ticker or exchange")
         if isin and not is_valid_isin(isin):
@@ -581,6 +582,11 @@ class PersonalStore:
             if matches:
                 parsed_ticker, parsed_exchange = matches[0]["ticker"], matches[0]["exchange"]
             elif not is_valid_ticker(parsed_ticker):
+                if raw_input and " " in raw_input:
+                    raise EarningsError(
+                        "invalid_argument",
+                        f"No tracked company matched '{raw_input}'. To start tracking a new company, enter its ticker (e.g. NVDA, 7203.T) or ISIN.",
+                    )
                 raise EarningsError("invalid_argument", "invalid ticker or exchange")
             existing = db.execute(
                 "SELECT id,state,hints,origin FROM follows WHERE person=? AND ticker=? AND exchange=? AND origin=?",

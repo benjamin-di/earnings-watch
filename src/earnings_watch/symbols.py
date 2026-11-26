@@ -40,6 +40,43 @@ SUFFIX_TO_MIC: dict[str, str] = {
     "VI": "XWBO",
 }
 
+EXCHANGE_ALIASES: dict[str, str] = {
+    "AMEX": "XASE",
+    "AMS": "XAMS",
+    "ARCA": "ARCX",
+    "ASX": "XASX",
+    "EPA": "XPAR",
+    "ETR": "XETR",
+    "FRA": "XETR",
+    "HKEX": "XHKG",
+    "HKG": "XHKG",
+    "JPX": "XTKS",
+    "KRX": "XKRX",
+    "LON": "XLON",
+    "LSE": "XLON",
+    "NAS": "XNAS",
+    "NASDAQ": "XNAS",
+    "NSDQ": "XNAS",
+    "NYSE": "XNYS",
+    "PAR": "XPAR",
+    "SEHK": "XHKG",
+    "SGX": "XSES",
+    "SIX": "XSWX",
+    "SSE": "XSHG",
+    "SWX": "XSWX",
+    "SZSE": "XSHE",
+    "TSE": "XTKS",
+    "TSX": "XTSE",
+    "TWSE": "XTAI",
+    "TYO": "XTKS",
+    "XETRA": "XETR",
+}
+
+
+def normalize_exchange(raw: str) -> str:
+    cleaned = raw.strip().upper()
+    return EXCHANGE_ALIASES.get(cleaned, cleaned)
+
 
 def is_valid_ticker(value: str) -> bool:
     return bool(TICKER_RE.fullmatch(value))
@@ -56,10 +93,10 @@ def is_valid_isin(value: str) -> bool:
 def parse_symbol(raw_value: str, raw_exchange: str = "") -> tuple[str, str]:
     """Normalize a user-supplied ticker/ISIN and optional exchange into (symbol, MIC)."""
     value = raw_value.strip().upper()
-    exchange = raw_exchange.strip().upper()
+    exchange = normalize_exchange(raw_exchange)
     if ":" in value:
         prefix, symbol = value.split(":", 1)
-        prefix, symbol = prefix.strip(), symbol.strip()
+        prefix, symbol = normalize_exchange(prefix), symbol.strip()
         if exchange and prefix and exchange != prefix:
             raise EarningsError("invalid_argument", "Conflicting exchange values.")
         exchange = exchange or prefix

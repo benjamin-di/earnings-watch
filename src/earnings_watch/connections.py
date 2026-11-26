@@ -9,7 +9,7 @@ import html
 import json
 import os
 from urllib.parse import quote
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from signin_window.oidc import BrowserAuth, OIDCConfig
 from starlette.applications import Starlette
@@ -30,6 +30,51 @@ from .ui import page, renderer_options
 MAX_BODY = 65536
 _VIEWS = frozenset({"upcoming", "companies", "digests", "calendar"})
 _FILTERS = frozenset({"all", "holdings", "watchlist", "earnings"})
+_COMMON_TIMEZONES = (
+    "UTC",
+    "America/New_York",
+    "America/Chicago",
+    "America/Los_Angeles",
+    "Europe/London",
+    "Europe/Berlin",
+    "Europe/Zurich",
+    "Europe/Paris",
+    "Asia/Hong_Kong",
+    "Asia/Singapore",
+    "Asia/Tokyo",
+    "Australia/Sydney",
+)
+_ALL_IANA_TIMEZONES = tuple(
+    sorted(
+        tz
+        for tz in available_timezones()
+        if "/" in tz and not tz.startswith("Etc/") and tz not in _COMMON_TIMEZONES
+    )
+)
+
+
+def _render_timezone_select(selected_tz: str) -> str:
+    def _opt(tz: str) -> str:
+        sel = " selected" if tz == selected_tz else ""
+        esc = html.escape(tz, quote=True)
+        return f'<option value="{esc}"{sel}>{html.escape(tz)}</option>'
+
+    common = list(_COMMON_TIMEZONES)
+    if (
+        selected_tz
+        and selected_tz not in _COMMON_TIMEZONES
+        and selected_tz not in _ALL_IANA_TIMEZONES
+    ):
+        common.insert(0, selected_tz)
+    common_opts = "".join(_opt(tz) for tz in common)
+    all_opts = "".join(_opt(tz) for tz in _ALL_IANA_TIMEZONES)
+    return (
+        '<select id="pref-tz" name="timezone" required>'
+        f'<optgroup label="Common">{common_opts}</optgroup>'
+        f'<optgroup label="All timezones">{all_opts}</optgroup>'
+        "</select>"
+    )
+
 
 _HUB_STYLE = """
 <style>
@@ -510,19 +555,41 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             if allow_import
             else ""
         )
+        request_company_popover = (
+            '<div id="request-company-popover" popover>'
+            "<h2>Track a new company</h2>"
+            '<p class="muted">Enter any stock ticker or ISIN to start tracking a company not yet in the catalogue. Automatic discovery will find its official investor-relations calendar.</p>'
+            '<form class="hub-stack" method="post" action="/connections/watch">'
+            + form_fields(profile, view="companies")
+            + '<div class="hub-field"><label for="req-ticker">Ticker or ISIN</label>'
+            '<input id="req-ticker" name="ticker" required maxlength="100" autocomplete="off" placeholder="e.g. NVDA, 7203.T, or US67066G1040"></div>'
+            '<div class="hub-field"><label for="req-exchange">Exchange or MIC (optional)</label>'
+            '<input id="req-exchange" name="exchange" maxlength="12" autocomplete="off" placeholder="e.g. XNAS, NYSE, XHKG"></div>'
+            '<div class="hub-field"><label for="req-name">Company name (optional)</label>'
+            '<input id="req-name" name="name" maxlength="120" autocomplete="off" placeholder="e.g. NVIDIA Corporation"></div>'
+            '<div class="hub-field"><label for="req-ir-url">Official IR URL hint (optional)</label>'
+            '<input id="req-ir-url" name="ir_url" type="url" maxlength="500" autocomplete="off" placeholder="https://investor.example.com/events"></div>'
+            '<div class="hub-actions">'
+            + button("Queue company for tracking")
+            + '<button type="button" class="secondary" popovertarget="request-company-popover" popovertargetaction="hide">Cancel</button>'
+            "</div></form></div>"
+        )
         quick_add = (
             '<div class="hub-toolbar">'
             '<form method="post" action="/connections/watch">'
             + form_fields(profile, view="companies")
             + '<div class="hub-field"><label for="watch-ticker">Company ticker, name, or ISIN</label>'
-            '<input id="watch-ticker" name="ticker" list="companies" required maxlength="100" autocomplete="off" placeholder="e.g. TICKER or 7203.T">'
+            '<input id="watch-ticker" name="ticker" list="companies" required maxlength="100" autocomplete="off" placeholder="e.g. NVDA, 7203.T, or company name">'
             f'<datalist id="companies">{options}</datalist></div>'
-            '<div class="hub-field" style="max-width:160px"><label for="watch-exchange">Exchange (MIC)</label>'
-            '<input id="watch-exchange" name="exchange" maxlength="4" placeholder="Optional"></div>'
+            '<div class="hub-field" style="max-width:160px"><label for="watch-exchange">Exchange / MIC</label>'
+            '<input id="watch-exchange" name="exchange" maxlength="12" placeholder="Optional"></div>'
             + button("Add to watchlist")
             + "</form>"
+            '<button type="button" class="secondary" popovertarget="request-company-popover">Request new company</button>'
             + import_button
             + "</div>"
+            '<p class="muted" style="margin-top:-.75rem;margin-bottom:1.25rem">Not tracked yet? Type any ticker (e.g. <code>NVDA</code>, <code>7203.T</code>, <code>NASDAQ:NVDA</code>) or ISIN above, or use <strong>Request new company</strong> to include a company name or official IR URL.</p>'
+            + request_company_popover
             + import_popover
         )
 
@@ -715,9 +782,8 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             + '<div class="hub-field"><label for="pref-hour">Brief hour (0–23)</label>'
             + f'<input id="pref-hour" name="hour" type="number" min="0" max="23" value="{prefs["hour"]}" required></div>'
             + '<div class="hub-field"><label for="pref-tz">Timezone</label>'
-            + f'<input id="pref-tz" name="timezone" value="{html.escape(tz_name, quote=True)}" required list="timezones">'
-            + '<datalist id="timezones"><option>UTC</option><option>Europe/Berlin</option>'
-            + "<option>Asia/Hong_Kong</option><option>America/New_York</option></datalist></div>"
+            + _render_timezone_select(tz_name)
+            + "</div>"
             + button("Save preferences")
             + "</form></div></article>"
         )
@@ -798,13 +864,25 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
     def _render_calendar_tab(service, profile) -> str:
         token = accounts.feed_token(settings.db, profile["person"], service.signing_key)
         link = settings.public_url.rstrip("/") + "/calendar/" + token + ".ics"
-        outlook = "https://outlook.live.com/calendar/0/addcalendar?url=" + quote(link, safe="")
+        encoded_link = quote(link, safe="")
+        outlook_live = (
+            "https://outlook.live.com/owa/?path=/calendar/action/compose"
+            f"&rru=addsubscription&url={encoded_link}&name=Earnings"
+        )
+        webcal_btn = ""
+        if link.startswith("https://"):
+            webcal_link = "webcal://" + link.removeprefix("https://")
+            webcal_btn = (
+                f'<a class="button secondary" href="{html.escape(webcal_link, quote=True)}">'
+                "Subscribe in calendar app</a>"
+            )
         return (
             '<article class="hub-card">'
             "<h2>Calendar subscription</h2>"
             "<p>Subscribe to a read-only calendar of your companies. Calendar apps control refresh timing, which can take hours. Your private link grants access to these events; keep it private.</p>"
             '<div class="hub-actions">'
-            f'<a class="button" href="{html.escape(outlook, quote=True)}" rel="noreferrer">Add to Outlook</a>'
+            f'<a class="button" href="{html.escape(outlook_live, quote=True)}" target="_blank" rel="noopener noreferrer">Add to Outlook</a>'
+            f"{webcal_btn}"
             "</div>"
             '<p class="muted" style="margin-top:1.25rem">Private calendar link</p>'
             '<div class="hub-code-box">'
@@ -954,9 +1032,11 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 accounts.preferences(settings.db, person, revision, updated, tz)
             elif action == "watch":
                 ir_url = str(form.get("ir_url", "")).strip() or None
+                company_name = str(form.get("name", "")).strip()[:120] or None
                 result = PersonalStore(settings.db, person).watch(
                     str(form.get("ticker", "")).strip(),
                     exchange,
+                    name=company_name,
                     ir_url=ir_url,
                     revision=revision,
                 )
@@ -1047,12 +1127,22 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 return Response("Unknown action.", 404)
             return RedirectResponse(redirect_url, 303)
         except (EarningsError, ValueError, KeyError) as exc:
+            back_view = ""
+            try:
+                back_view = str(form.get("view", "")).strip()
+            except Exception:
+                back_view = ""
+            back_href = (
+                f"/connections/?view={back_view}"
+                if back_view in _VIEWS and back_view != "upcoming"
+                else "/connections/"
+            )
             return HTMLResponse(
                 page(
                     "Please review your change",
                     "<p>"
                     + html.escape(str(exc))
-                    + '</p><a href="/connections/">Return to Earnings</a>',
+                    + f'</p><a href="{back_href}">Return to Earnings</a>',
                 ),
                 409,
             )

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.1] - 2026-11-26
+
+### Fixed
+
+- Fix the Calendar tab's "Add to Outlook" link to use Outlook's `rru=addsubscription` web subscribe deep link and add a `webcal://` calendar app subscription button.
+- Replace the Digests & Alerts timezone `<input list="timezones">` with a full IANA `<select>` dropdown (Common + All timezones) so changing the timezone no longer filters to only the currently saved value.
+- Improve new/untracked company onboarding on the Companies tab: normalize common exchange aliases (`NASDAQ`, `NYSE`, `HKEX`, `LSE`, `TSE`, etc.) to ISO 10383 MICs, add a "Request new company" popover supporting optional company name and official IR URL hints, show clear guidance when an untracked company name is entered without a ticker or ISIN, and preserve the active tab on 409 error return links.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.5.0, 0.4.4, 0.4.3, 0.4.2, 0.4.1, 0.4.0, and 0.3.3; no schema change.
+
+[0.5.1]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.5.1
+
 ## [0.5.0] - 2026-11-26
 
 ### Added

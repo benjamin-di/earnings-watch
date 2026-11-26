@@ -882,3 +882,91 @@ async def test_news_endpoints_return_404_when_news_digest_disabled(seeded):
         ]:
             resp = await client.post(path, data=payload, headers={"Origin": "http://localhost"})
             assert resp.status_code == 404, (path, resp.status_code)
+
+
+async def test_calendar_outlook_links_timezone_select_and_new_company_onboarding(seeded):
+    seeded.integrations.news_digest.enabled = True
+    accounts.provision(seeded.db, "alice")
+    prof = accounts.profile(seeded.db, "alice")
+    accounts.preferences(seeded.db, "alice", prof["revision"], prof["settings"], "Asia/Hong_Kong")
+    auth = _browser(seeded, "alice")
+    seeded.public_url = "https://earnings.example.com"
+    directory = _Directory(
+        {"alice": {"admitted": True, "disabled": False, "portfolio_admitted": True}}
+    )
+    app = create_app(seeded, auth=auth, directory=directory)
+    async with (
+        app.earnings_app.router.lifespan_context(app.earnings_app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            cookies={auth.cookie: "a" * 43},
+        ) as client,
+    ):
+        # 1. Calendar tab: Outlook subscribe deep link uses rru=addsubscription (not broken addcalendar).
+        cal_html = (await client.get("/connections/?view=calendar")).text
+        assert "/calendar/0/addcalendar" not in cal_html
+        assert (
+            "https://outlook.live.com/owa/?path=/calendar/action/compose&amp;rru=addsubscription&amp;url="
+            in cal_html
+        )
+        assert "webcal://earnings.example.com/calendar/" in cal_html
+        assert 'target="_blank"' in cal_html
+
+        # 2. Digests tab: Timezone is a <select> with full IANA options (not <input list> locked to HK).
+        digests_html = (await client.get("/connections/?view=digests")).text
+        assert '<select id="pref-tz" name="timezone" required>' in digests_html
+        assert 'list="timezones"' not in digests_html
+        assert '<option value="Asia/Hong_Kong" selected>Asia/Hong_Kong</option>' in digests_html
+        assert '<option value="Europe/London">Europe/London</option>' in digests_html
+        assert '<option value="America/New_York">America/New_York</option>' in digests_html
+        assert '<option value="Asia/Tokyo">Asia/Tokyo</option>' in digests_html
+
+        # 3. Companies tab: supports requesting new untracked companies with exchange aliases, name, and IR URL.
+        companies_html = (await client.get("/connections/?view=companies")).text
+        assert 'popovertarget="request-company-popover"' in companies_html
+        assert 'id="request-company-popover" popover' in companies_html
+        assert 'name="ir_url"' in companies_html
+
+        rev = accounts.profile(seeded.db, "alice")["revision"]
+        r_new = await client.post(
+            "/connections/watch",
+            data={
+                "revision": str(rev),
+                "view": "companies",
+                "ticker": "NASDAQ:NEWCO",
+                "exchange": "",
+                "name": "NewCo Synthetic",
+                "ir_url": "https://ir.newco.example/events",
+            },
+            headers={"Origin": "http://localhost"},
+            follow_redirects=False,
+        )
+        assert r_new.status_code == 303
+        assert r_new.headers["location"] == "/connections/?view=companies&keep_seen=1"
+        follows = PersonalStore(seeded.db, "alice").follows()
+        queued = [f for f in follows if f["ticker"] == "NEWCO"]
+        assert len(queued) == 1
+        assert queued[0]["exchange"] == "XNAS"
+        assert queued[0]["state"] == "queued"
+        assert queued[0]["company_name"] == "NewCo Synthetic"
+
+        companies_after = (await client.get("/connections/?view=companies")).text
+        assert "NewCo Synthetic" in companies_after
+        assert "Discovering..." in companies_after
+
+        # Untracked multi-word name without ticker/ISIN gives actionable message and returns to companies view.
+        rev2 = accounts.profile(seeded.db, "alice")["revision"]
+        r_name = await client.post(
+            "/connections/watch",
+            data={
+                "revision": str(rev2),
+                "view": "companies",
+                "ticker": "Untracked Holdings Corp",
+                "exchange": "",
+            },
+            headers={"Origin": "http://localhost"},
+        )
+        assert r_name.status_code == 409
+        assert "ticker" in r_name.text.lower() and "isin" in r_name.text.lower()
+        assert 'href="/connections/?view=companies"' in r_name.text
