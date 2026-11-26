@@ -218,5 +218,6 @@ async def test_websearch_verifies_saved_pages_and_never_claims_complete_catalogu
     before = catalogue.events()[0]["date"]
     result = await Maintenance(seeded, runner=runner).sweep()
     assert bool(result["errors"]) is not captured
+    assert result["exit"] == 0
     assert next(e for e in catalogue.events() if e["period"] == "2026Q4")["date"] == before
     assert len(catalogue.events()) == (2 if captured else 1)

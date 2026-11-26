@@ -28,6 +28,16 @@ def test_worker_restart_and_failed_sweep_retries():
     status["last_sweep"]["exit"] = 3
     assert sweep_due(status, now)
     assert sweep_due(status, now + timedelta(hours=1))
+    # Completed failed sweep respects the 60-minute retry cooldown.
+    status["last_sweep"]["ended"] = now.isoformat()
+    assert not sweep_due(status, now + timedelta(minutes=10))
+    assert not sweep_due(status, now + timedelta(minutes=59))
+    assert sweep_due(status, now + timedelta(minutes=60))
+    after_midnight = datetime(2026, 10, 30, 0, 10, tzinfo=timezone.utc)
+    status["last_sweep"]["ended"] = (after_midnight - timedelta(minutes=20)).isoformat()
+    assert not sweep_due(status, after_midnight)
+    status["last_sweep"]["ended"] = (after_midnight - timedelta(minutes=60)).isoformat()
+    assert sweep_due(status, after_midnight)
 
 
 async def test_none_backend_still_runs_official_release_provider(seeded, monkeypatch):

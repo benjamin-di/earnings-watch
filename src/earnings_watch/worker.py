@@ -1,17 +1,36 @@
 """Restart-safe UTC scheduler; a failed sweep has priority over documents."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from .maintenance import Maintenance
 from .settings import Settings
+
+FAILED_SWEEP_COOLDOWN = timedelta(minutes=60)
+
+
+def _retry_ready(previous, now):
+    ended = previous.get("ended")
+    if not isinstance(ended, str) or not ended:
+        return True
+    try:
+        finished = datetime.fromisoformat(ended)
+    except ValueError:
+        return True
+    if finished.tzinfo is None:
+        finished = finished.replace(tzinfo=timezone.utc)
+    return now - finished >= FAILED_SWEEP_COOLDOWN
 
 
 def sweep_due(status, now):
     previous = status.get("last_sweep")
     if (now.hour, now.minute) < (23, 10):
-        # A failed prior evening sweep continues retrying after midnight.
-        return bool(previous and previous["exit"] != 0)
-    return not previous or previous["exit"] != 0 or previous["started"][:10] != str(now.date())
+        # A failed prior evening sweep continues retrying after midnight with bounded backoff.
+        return bool(previous and previous["exit"] != 0 and _retry_ready(previous, now))
+    if not previous:
+        return True
+    if previous["exit"] != 0:
+        return _retry_ready(previous, now)
+    return previous["started"][:10] != str(now.date())
 
 
 async def run(settings: Settings) -> None:

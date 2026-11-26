@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.3] - 2026-11-26
+
+### Fixed
+
+- Add a 60-minute cooldown before `worker.sweep_due()` retries a completed failed sweep (`exit != 0`) so transient source failures run `docs_only` ticks instead of re-sweeping every 10 minutes.
+- Keep `claims_rejected` recorded in run diagnostics and `fetch_state` without failing the entire sweep's exit code (`exit=3`) when no source fetch or runner error occurred.
+- Instruct extraction and research prompts to use IANA timezone names (such as `America/New_York` or `Europe/London`) for `release_tz` rather than abbreviations.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.4.2, 0.4.1, 0.4.0, and 0.3.3; no schema change.
+
+[0.4.3]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.4.3
+
 ## [0.4.2] - 2026-11-25
 
 ### Fixed
