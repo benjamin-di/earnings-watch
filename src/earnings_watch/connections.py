@@ -169,6 +169,82 @@ async def _targets_payload(settings, directory) -> dict:
     return {"schema": 1, "generated_at": generated_at, "people": result_people}
 
 
+async def _library_targets_payload(settings, directory) -> dict:
+    generated_at = datetime.now(timezone.utc).isoformat()
+    library = LibraryReader(settings.db)
+    sources_by_key = {source.key: source for source in library.sources()}
+    event_to_source = {ev["id"]: ev["issuer_key"] for ev in library.events()}
+    docs_by_source: dict[str, list[dict]] = {}
+    for doc in library.documents():
+        if doc.get("verified") is not True:
+            continue
+        source_key = event_to_source.get(str(doc.get("event_id") or ""))
+        if not source_key:
+            continue
+        docs_by_source.setdefault(source_key, []).append(
+            {
+                "id": str(doc.get("id") or ""),
+                "event_id": str(doc.get("event_id") or ""),
+                "url": str(doc.get("url") or ""),
+                "title": str(doc.get("title") or ""),
+                "role": str(doc.get("role") or ""),
+                "first_seen": str(doc.get("first_seen") or ""),
+            }
+        )
+
+    active_source_keys: set[str] = set()
+    scopes: list[dict] = []
+    for person_row in people(settings.db):
+        subject = person_row["id"]
+        if directory is not None:
+            info = await directory.resolve(subject)
+            if not info["admitted"] or info["disabled"]:
+                continue
+            portfolio_admitted = bool(info.get("portfolio_admitted") is True)
+        else:
+            portfolio_admitted = False
+        follows = PersonalStore(settings.db, subject).follows()
+        person_keys: set[str] = set()
+        for row in follows:
+            if row["origin"].startswith("holdings:") and not portfolio_admitted:
+                continue
+            source_key = row.get("source_key")
+            if source_key and source_key in sources_by_key:
+                person_keys.add(source_key)
+                active_source_keys.add(source_key)
+        scopes.append({"person": subject, "source_keys": sorted(person_keys)})
+
+    companies: list[dict] = []
+    for source_key in sorted(active_source_keys):
+        source = sources_by_key[source_key]
+        ir_urls: list[str] = []
+        for raw_url in (source.calendar_url, source.results_url, source.announcements_url):
+            url = (raw_url or "").strip()
+            if url and url not in ir_urls:
+                ir_urls.append(url)
+        companies.append(
+            {
+                "source_key": source.key,
+                "ticker": source.ticker,
+                "exchange": source.exchange or "",
+                "name": source.name,
+                "isin": source.isin,
+                "sec_cik": source.sec_cik,
+                "hkex_stock_id": source.hkex_stock_id,
+                "lei": source.lei,
+                "ir_urls": ir_urls,
+                "verified_documents": docs_by_source.get(source.key, []),
+            }
+        )
+
+    return {
+        "schema": 1,
+        "generated_at": generated_at,
+        "companies": companies,
+        "scopes": scopes,
+    }
+
+
 def create_app(settings, mode="gateway", *, auth=None, directory=None):
     if directory is None and settings.directory_url:
         directory = IdentityDirectory(
@@ -1010,6 +1086,27 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             )
         return JSONResponse(payload, status_code=200, headers={"Cache-Control": "no-store"})
 
+    async def internal_library_targets(request):
+        if not _valid_bearer(dict(request.headers), settings.library_targets_tokens_env):
+            return JSONResponse(
+                {"error": "unauthorized"}, status_code=401, headers={"Cache-Control": "no-store"}
+            )
+        if settings.directory_required and directory is None:
+            return JSONResponse(
+                {"error": "identity directory unavailable"},
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        try:
+            payload = await _library_targets_payload(settings, directory)
+        except Exception:
+            return JSONResponse(
+                {"error": "identity directory unavailable"},
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(payload, status_code=200, headers={"Cache-Control": "no-store"})
+
     async def calendar_feed(request):
         person = accounts.feed_person(settings.db, request.path_params["token"])
         if not person:
@@ -1052,6 +1149,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         Route("/", lambda request: RedirectResponse("/connections/", 303)),
         Route("/health", health),
         Route("/internal/targets", internal_targets, methods=["GET"]),
+        Route("/internal/library-targets", internal_library_targets, methods=["GET"]),
         Route("/connections/", home),
         Route("/calendar/{token}.ics", calendar_feed),
     ]

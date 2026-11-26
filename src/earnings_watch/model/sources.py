@@ -43,6 +43,8 @@ class Source(BaseModel):
     calendar_timezone: str | None = None
     calendar_timezone_basis: str | None = None
     sec_cik: int | None = Field(default=None, ge=1, le=9999999999)
+    hkex_stock_id: str | None = Field(default=None, pattern=r"^[0-9]{1,8}$")
+    lei: str | None = Field(default=None, pattern=r"^[A-Z0-9]{18}[0-9]{2}$")
 
     @model_validator(mode="after")
     def _timing_configuration(self):

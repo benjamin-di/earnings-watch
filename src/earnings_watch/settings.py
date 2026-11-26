@@ -31,6 +31,7 @@ class Settings(BaseModel):
     allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "[::1]"])
     backend_tokens_env: list[str] = Field(default_factory=list)
     targets_tokens_env: list[str] = Field(default_factory=list)
+    library_targets_tokens_env: list[str] = Field(default_factory=list)
     # Optional OpenAI Responses-compatible endpoint for the Codex backend; the
     # key is read from the named environment variable, never from this file.
     codex_base_url: str = ""
@@ -128,6 +129,7 @@ def load(path: Path | None = None) -> Settings:
                 "allowed_hosts",
                 "backend_tokens_env",
                 "targets_tokens_env",
+                "library_targets_tokens_env",
                 "provider_allowlist",
             }:
                 values[key] = env.split(",") if env else []
