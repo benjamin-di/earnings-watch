@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.4] - 2026-11-26
+
+### Fixed
+
+- Cap automatic removals during an authoritative sweep to 3 per pass before calling `commit_issuer()` so multi-event `removal-held` expirations drain cleanly across consecutive sweeps instead of permanently wedging the issuer on `automatic removal cap exceeded`.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.4.3, 0.4.2, 0.4.1, 0.4.0, and 0.3.3; no schema change.
+
+[0.4.4]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.4.4
+
 ## [0.4.3] - 2026-11-26
 
 ### Fixed

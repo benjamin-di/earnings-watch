@@ -221,3 +221,43 @@ async def test_websearch_verifies_saved_pages_and_never_claims_complete_catalogu
     assert result["exit"] == 0
     assert next(e for e in catalogue.events() if e["period"] == "2026Q4")["date"] == before
     assert len(catalogue.events()) == (2 if captured else 1)
+
+
+async def test_authoritative_sweep_drains_more_than_three_removals_across_sweeps(seeded):
+    from datetime import timedelta
+
+    open(seeded).watch("ALPHA")
+    catalogue = Catalogue(seeded.db)
+    base = date.today() + timedelta(days=30)
+    # Seed 4 events already marked removal-held so an authoritative empty extraction drops all 4.
+    held_events = [
+        event(
+            period=f"2026Q{n}",
+            id=f"earnings:alpha:2026Q{n}",
+            date=base + timedelta(days=n),
+            history=[
+                {
+                    "at": "2026-10-01T00:00:00+00:00",
+                    "action": "removal-held",
+                }
+            ],
+        )
+        for n in range(1, 5)
+    ]
+    catalogue.commit_issuer("alpha", held_events, run_id="seed-held")
+    runner = AsyncMock()
+
+    async def run_task(task, **kwargs):
+        if task.schema is ExtractResult:
+            return AgentResult(ExtractResult(page_relevant=True, complete=True, events=[]), "fake")
+        return AgentResult(task.schema.model_validate({"documents": []}), "fake")
+
+    runner.run.side_effect = run_task
+    maintenance = Maintenance(seeded, runner=runner, transport=transport("Empty IR calendar"))
+    first = await maintenance.sweep(force=True)
+    assert first["exit"] == 0 and not first["errors"]
+    # At most 3 removed in the first pass; newest 1 retained for the next sweep.
+    assert len(catalogue.events()) == 1
+    second = await maintenance.sweep(force=True)
+    assert second["exit"] == 0 and not second["errors"]
+    assert len(catalogue.events()) == 0

@@ -252,6 +252,16 @@ class Maintenance:
                                     seed_mode=False,
                                     now=datetime.now(timezone.utc),
                                 )
+                                if authoritative:
+                                    old_by_id = {e.id: e for e in old}
+                                    removed_ids = set(old_by_id) - {e.id for e in merged}
+                                    if len(removed_ids) > 3:
+                                        # Drain at most 3 removals per authoritative sweep so
+                                        # multi-event expirations never wedge commit_issuer's cap.
+                                        keep_ids = sorted(
+                                            removed_ids, key=lambda eid: (old_by_id[eid].date, eid)
+                                        )[3:]
+                                        merged = [*merged, *(old_by_id[eid] for eid in keep_ids)]
                                 planned.extend(e.model_dump(mode="json") for e in merged)
                                 counts["events"] += len(merged)
                                 if not dry_run:
