@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.0] - 2026-11-26
+
+### Added
+
+- Unified `1080px` zero-JS 4-tab Company Hub Web UI (`Upcoming`, `Companies`, `Digests & Alerts`, `Calendar`) using native HTML Popover API with strict `portfolio_admitted` holdings isolation across UI, CSV import, and `.ics` feeds.
+- Read-only bearer-authenticated `GET /internal/targets` and `GET /internal/library-targets` endpoints, plus opt-in `[integrations.news_digest]` user preferences stored in `profiles.settings` (zero schema migration, `PRAGMA user_version=3`).
+- Pure-stdlib HTML/text email renderer (`render.py`), TLS-only SMTP delivery (`notify --channel smtp --all`), and `weekly_brief` notifications.
+- Multi-user onboarding improvements, symbol/exchange normalization (`.DE`, `BRK.B`, ISIN), partial CSV import, and `Source` `hkex_stock_id`/`lei` fields.
+
+### Fixed
+
+- Recognize combined results-and-call rows in `timing.call_only`.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.4.4, 0.4.3, 0.4.2, 0.4.1, 0.4.0, and 0.3.3; no schema change.
+
+[0.5.0]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.5.0
+
 ## [0.4.4] - 2026-11-26
 
 ### Fixed
