@@ -54,6 +54,13 @@ _ALL_IANA_TIMEZONES = tuple(
 )
 
 
+def _is_windows_client(headers) -> bool:
+    platform = headers.get("sec-ch-ua-platform", "").strip().strip('"').lower()
+    if platform:
+        return platform == "windows"
+    return "windows" in headers.get("user-agent", "").lower()
+
+
 def _render_timezone_select(selected_tz: str) -> str:
     def _opt(tz: str) -> str:
         sel = " selected" if tz == selected_tz else ""
@@ -965,7 +972,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             "</div>" + "".join(cards)
         )
 
-    def _render_calendar_tab(service, profile) -> str:
+    def _render_calendar_tab(service, profile, *, is_windows: bool = False) -> str:
         token = accounts.feed_token(settings.db, profile["person"], service.signing_key)
         link = settings.public_url.rstrip("/") + "/calendar/" + token + ".ics"
         encoded_link = quote(link, safe="")
@@ -974,12 +981,20 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             f"&rru=addsubscription&url={encoded_link}&name=Earnings"
         )
         webcal_btn = ""
-        if link.startswith("https://"):
+        if link.startswith("https://") and not is_windows:
             webcal_link = "webcal://" + link.removeprefix("https://")
             webcal_btn = (
                 f'<a class="button secondary" href="{html.escape(webcal_link, quote=True)}">'
                 "Subscribe in calendar app</a>"
             )
+        windows_hint = (
+            '<p class="muted" style="margin-top:.75rem">'
+            "Using New Outlook for Windows? Use <strong>Add to Outlook</strong> "
+            "above, or copy the <code>https://</code> link below into "
+            "<strong>Add calendar &rarr; Subscribe from web</strong>.</p>"
+            if is_windows
+            else ""
+        )
         return (
             '<article class="hub-card">'
             "<h2>Calendar subscription</h2>"
@@ -988,6 +1003,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             f'<a class="button" href="{html.escape(outlook_live, quote=True)}" target="_blank" rel="noopener noreferrer">Add to Outlook</a>'
             f"{webcal_btn}"
             "</div>"
+            f"{windows_hint}"
             '<p class="muted" style="margin-top:1.25rem">Private calendar link</p>'
             '<div class="hub-code-box">'
             f'<code id="calendar-link">{html.escape(link, quote=True)}</code>'
@@ -1052,7 +1068,9 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             elif view == "preview":
                 tab_body = _render_preview_tab(service, profile, show_holdings=show_holdings)
             else:
-                tab_body = _render_calendar_tab(service, profile)
+                tab_body = _render_calendar_tab(
+                    service, profile, is_windows=_is_windows_client(request.headers)
+                )
 
             nav_view = "digests" if view == "preview" else view
             body = _HUB_STYLE + _render_tabs(nav_view) + tab_body

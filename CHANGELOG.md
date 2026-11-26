@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.3] - 2026-11-26
+
+### Fixed
+
+- Omit the `webcal://` "Subscribe in calendar app" button on Windows clients (where New Outlook's protocol handler strips `webcal:` to `//host/...` and rejects it as an invalid URL), and show a clear New Outlook for Windows hint directing users to "Add to Outlook" or the copyable `https://` link while keeping `webcal://` on macOS, iOS, and other platforms.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.5.2, 0.5.1, 0.5.0, 0.4.4, 0.4.3, 0.4.2, 0.4.1, 0.4.0, and 0.3.3; no schema change.
+
+[0.5.3]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.5.3
+
 ## [0.5.2] - 2026-11-26
 
 ### Added

@@ -1148,3 +1148,65 @@ async def test_digests_delivery_history_isolation_and_brief_preview(seeded):
         assert preview.text.count("<script") == 1
         # Preview is non-mutating.
         assert accounts.profile(seeded.db, "alice")["seen_seq"] == seen_before
+
+
+@pytest.mark.asyncio
+async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
+    """Windows New Outlook strips webcal: to //host/... (Invalid URL); omit webcal:// on Windows."""
+    auth = _browser(seeded, "alice")
+    seeded.public_url = "https://earnings.example.com"
+    directory = _Directory(
+        {"alice": {"admitted": True, "disabled": False, "portfolio_admitted": True}}
+    )
+    app = create_app(seeded, auth=auth, directory=directory)
+    async with (
+        app.earnings_app.router.lifespan_context(app.earnings_app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            cookies={auth.cookie: "a" * 43},
+        ) as client,
+    ):
+        # 1. Windows via Chromium Client Hints: no webcal:// button; Outlook.com + copyable HTTPS link present.
+        win_ch = (
+            await client.get(
+                "/connections/?view=calendar",
+                headers={
+                    "Sec-CH-UA-Platform": '"Windows"',
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0",
+                },
+            )
+        ).text
+        assert "webcal://" not in win_ch
+        assert "Subscribe in calendar app" not in win_ch
+        assert (
+            "https://outlook.live.com/owa/?path=/calendar/action/compose&amp;rru=addsubscription&amp;url="
+            in win_ch
+        )
+        assert '<code id="calendar-link">https://earnings.example.com/calendar/' in win_ch
+        assert "Subscribe from web" in win_ch
+
+        # 2. Windows via User-Agent only (e.g. Firefox without Sec-CH-UA-Platform).
+        win_ua = (
+            await client.get(
+                "/connections/?view=calendar",
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+                },
+            )
+        ).text
+        assert "webcal://" not in win_ua
+        assert "Subscribe in calendar app" not in win_ua
+
+        # 3. macOS / iOS keep the standard webcal:// button for Apple Calendar.
+        mac_html = (
+            await client.get(
+                "/connections/?view=calendar",
+                headers={
+                    "Sec-CH-UA-Platform": '"macOS"',
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+                },
+            )
+        ).text
+        assert "webcal://earnings.example.com/calendar/" in mac_html
+        assert "Subscribe in calendar app" in mac_html
