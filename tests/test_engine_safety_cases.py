@@ -202,3 +202,35 @@ def test_conflicting_verified_candidates_keep_event_all_day():
     assert not result.rejected
     assert result.events[0].release_time is None
     assert result.events[0].timing_issue and len(result.events[0].timing_disputes) == 2
+
+
+@pytest.mark.parametrize(
+    ("evidence", "expected_call_only"),
+    [
+        (
+            "January 28, 2027 | Preliminary results for the 2026 financial year with Annual Media Conference and Investor and Analyst Conference Call",
+            False,
+        ),
+        ("February 10, 2027 | Full-year 2026 results and investor webcast", False),
+        (
+            "April 26, 2027 | Earnings Report as of March 31, 2027 with Investor and Analyst Conference Call",
+            False,
+        ),
+        ("January 29, 2027 | Fixed Income Investor Conference Call on Q4 2026 results", True),
+        ("October 19, 2026 | Q3 2026 Earnings Call", True),
+        ("November 5, 2026 | Q3 2026 results conference call", True),
+        ("November 5, 2026 | Q3 2026 results presentation and conference call", True),
+    ],
+)
+def test_call_only_distinguishes_combined_results_from_call_only_entries(
+    evidence, expected_call_only
+):
+    row = event(date=DAY, evidence=evidence)
+    normalized = timing.with_legacy_evidence(row)
+    assert timing.call_only(evidence) is expected_call_only
+    if expected_call_only:
+        assert normalized.status == "expected"
+        assert normalized.timing_issue == timing.CALL_ONLY_RESULTS
+    else:
+        assert normalized.status == "ir-confirmed"
+        assert normalized.timing_issue is None
