@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.2] - 2026-11-26
+
+### Added
+
+- Enrich notification outbox payloads (`results`, `urgent`, `brief`, `weekly_brief`) with user `timezone`, `has_holdings`, and per-event `why_followed` and `issuer_name` so downstream mail renderers format local times and data-driven holding badges accurately.
+- Add non-mutating `GET /connections/?view=preview` (with upfront `include_holdings` gating) and a per-user `Recent Earnings Deliveries` table on the Digests tab (prioritizing active `pending`/`unknown` rows and excluding legacy/migration rows).
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.5.1, 0.5.0, 0.4.4, 0.4.3, 0.4.2, 0.4.1, 0.4.0, and 0.3.3; no schema change.
+
+[0.5.2]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.5.2
+
 ## [0.5.1] - 2026-11-26
 
 ### Fixed

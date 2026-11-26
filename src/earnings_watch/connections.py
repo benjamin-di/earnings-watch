@@ -17,18 +17,19 @@ from starlette.datastructures import UploadFile
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import BaseRoute, Mount, Route
 
-from . import interests
+from . import interests, notify
 from .composition import open_service
 from .errors import EarningsError
 from .http_server import AuthenticatedApp
 from .presentation import format_utc_slot, group_upcoming
+from .render import render_email
 from .store import accounts
 from .store.database import Catalogue, LibraryReader, PersonalStore, integrity, people
 from .transport import IdentityDirectory
 from .ui import page, renderer_options
 
 MAX_BODY = 65536
-_VIEWS = frozenset({"upcoming", "companies", "digests", "calendar"})
+_VIEWS = frozenset({"upcoming", "companies", "digests", "calendar", "preview"})
 _FILTERS = frozenset({"all", "holdings", "watchlist", "earnings"})
 _COMMON_TIMEZONES = (
     "UTC",
@@ -98,6 +99,7 @@ main{max-width:1080px}
 .hub-badge-confirmed{border-color:var(--accent);color:var(--accent)}
 .hub-badge-changed{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .hub-badge-paused{border-style:dashed}
+.hub-preview-text{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88rem;line-height:1.5;background:var(--bg);border:1px solid var(--line);border-radius:.65rem;padding:.9rem 1rem;margin:.75rem 0 0;overflow-x:auto}
 .hub-badge-off{opacity:.75}
 .hub-toolbar{display:flex;gap:.75rem;flex-wrap:wrap;align-items:flex-end;background:var(--surface);border:1px solid var(--line);border-radius:.85rem;padding:1rem;margin-bottom:1.25rem}
 .hub-toolbar form{display:flex;gap:.65rem;flex-wrap:wrap;align-items:flex-end;margin:0;flex:1 1 480px}
@@ -784,12 +786,67 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             + '<div class="hub-field"><label for="pref-tz">Timezone</label>'
             + _render_timezone_select(tz_name)
             + "</div>"
+            + '<div class="hub-actions">'
             + button("Save preferences")
+            + '<a class="button secondary" href="/connections/?view=preview">Preview next brief</a>'
+            + "</div>"
             + "</form></div></article>"
         )
 
+        deliveries_rows = accounts.recent_deliveries(settings.db, profile["person"], limit=20)
+        kind_labels = {
+            "results": "Results",
+            "brief": "Daily brief",
+            "weekly_brief": "Weekly brief",
+            "urgent": "Urgent",
+        }
+        state_labels = {
+            "sent": ("Sent", "hub-badge hub-badge-confirmed"),
+            "pending": ("Pending", "hub-badge"),
+            "unknown": ("Waiting review", "hub-badge hub-badge-paused"),
+            "suppressed": ("Suppressed", "hub-badge hub-badge-off"),
+            "superseded": ("Superseded", "hub-badge hub-badge-off"),
+        }
+        try:
+            user_tz = ZoneInfo(tz_name)
+        except (ValueError, ZoneInfoNotFoundError):
+            user_tz = ZoneInfo("UTC")
+        if deliveries_rows:
+            d_trs = []
+            for drow in deliveries_rows:
+                k_label = kind_labels.get(drow["kind"], drow["kind"])
+                s_label, s_cls = state_labels.get(drow["state"], (drow["state"], "hub-badge"))
+                sent_str = "—"
+                if drow.get("sent_at"):
+                    try:
+                        dt = datetime.fromisoformat(drow["sent_at"])
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        sent_str = dt.astimezone(user_tz).strftime("%Y-%m-%d %H:%M %Z")
+                    except ValueError:
+                        sent_str = str(drow["sent_at"])[:19]
+                d_trs.append(
+                    "<tr>"
+                    f"<td>{html.escape(k_label)}</td>"
+                    f"<td><code>{html.escape(drow['key'])}</code></td>"
+                    f'<td><span class="{s_cls}">{html.escape(s_label)}</span></td>'
+                    f'<td class="muted">{html.escape(sent_str)}</td>'
+                    "</tr>"
+                )
+            history_html = (
+                '<section class="hub-section"><h2>Recent Earnings Deliveries</h2>'
+                '<div class="hub-table-wrap"><table class="hub-table">'
+                "<thead><tr><th>Type</th><th>Delivery key</th><th>Status</th><th>Sent</th></tr></thead>"
+                f"<tbody>{''.join(d_trs)}</tbody></table></div></section>"
+            )
+        else:
+            history_html = (
+                '<section class="hub-section"><h2>Recent Earnings Deliveries</h2>'
+                '<p class="muted">No notifications recorded yet.</p></section>'
+            )
+
         if not news_enabled:
-            return f'<div class="hub-cards">{alerts_card}</div>'
+            return f'<div class="hub-cards">{alerts_card}</div>{history_html}'
 
         pause_until = str(prefs.get("news_pause_until") or "")
         if not prefs.get("news_digest"):
@@ -859,7 +916,54 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             + button("Save news digest")
             + "</form></div></article>"
         )
-        return f'<div class="hub-cards">{alerts_card}{news_card}</div>'
+        return f'<div class="hub-cards">{alerts_card}{news_card}</div>{history_html}'
+
+    def _render_preview_tab(service, profile, *, show_holdings: bool) -> str:
+        tz_name = profile["timezone"]
+        pending = notify.notices(settings, profile["person"], include_holdings=show_holdings)
+        cards: list[str] = []
+
+        for _key, kind, payload in pending:
+            rendered = render_email(kind, payload, timezone_name=tz_name)
+            cards.append(
+                '<article class="hub-card">'
+                f'<div class="hub-card-head"><h2>{html.escape(rendered.subject)}</h2>'
+                f'<span class="hub-badge hub-badge-confirmed">{html.escape(kind)}</span></div>'
+                f'<pre class="hub-preview-text">{html.escape(rendered.text.strip())}</pre>'
+                "</article>"
+            )
+
+        if not cards:
+            sample = service.upcoming(days=7, include_holdings=show_holdings)
+            sample_events = sample["events"]
+            try:
+                local_today = datetime.now(ZoneInfo(tz_name)).date()
+            except (ValueError, ZoneInfoNotFoundError):
+                local_today = datetime.now(timezone.utc).date()
+            sample_payload = {
+                "day": str(local_today),
+                "events": sample_events,
+                "changes": [],
+                "documents": [],
+                "timezone": tz_name,
+                "has_holdings": show_holdings,
+            }
+            rendered = render_email("weekly_brief", sample_payload, timezone_name=tz_name)
+            cards.append(
+                '<article class="hub-card">'
+                f'<div class="hub-card-head"><h2>{html.escape(rendered.subject)}</h2>'
+                '<span class="hub-badge">Sample (none due right now)</span></div>'
+                '<p class="muted">No notification is due at this moment (quiet day or before your brief hour). '
+                "Here is what a 7-day brief looks like from your current follows:</p>"
+                f'<pre class="hub-preview-text">{html.escape(rendered.text.strip())}</pre>'
+                "</article>"
+            )
+
+        return (
+            '<div class="hub-actions" style="margin-bottom:1rem">'
+            '<a class="button secondary" href="/connections/?view=digests">← Back to Digests</a>'
+            "</div>" + "".join(cards)
+        )
 
     def _render_calendar_tab(service, profile) -> str:
         token = accounts.feed_token(settings.db, profile["person"], service.signing_key)
@@ -945,10 +1049,13 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 tab_body = _render_digests_tab(
                     profile, info, show_holdings=show_holdings, news_enabled=news_enabled
                 )
+            elif view == "preview":
+                tab_body = _render_preview_tab(service, profile, show_holdings=show_holdings)
             else:
                 tab_body = _render_calendar_tab(service, profile)
 
-            body = _HUB_STYLE + _render_tabs(view) + tab_body
+            nav_view = "digests" if view == "preview" else view
+            body = _HUB_STYLE + _render_tabs(nav_view) + tab_body
             if request.query_params.get("keep_seen") != "1" and view == "upcoming":
                 accounts.mark_seen(settings.db, person, page_seq)
             return HTMLResponse(

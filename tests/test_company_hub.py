@@ -970,3 +970,181 @@ async def test_calendar_outlook_links_timezone_select_and_new_company_onboarding
         assert r_name.status_code == 409
         assert "ticker" in r_name.text.lower() and "isin" in r_name.text.lower()
         assert 'href="/connections/?view=companies"' in r_name.text
+
+
+async def test_notices_enrich_payloads_with_timezone_holdings_and_issuer_name(seeded):
+    PersonalStore(seeded.db, "alice").watch("ALPHA", "XNAS")
+    sync_holdings(seeded.db, "bob", "portfolio", [{"ticker": "ALPHA", "exchange": "XNAS"}])
+    for person in ("alice", "bob"):
+        prof = accounts.profile(seeded.db, person)
+        accounts.preferences(
+            seeded.db,
+            person,
+            prof["revision"],
+            prof["settings"] | {"brief": True, "weekly_brief": True, "hour": 0},
+            "Asia/Hong_Kong",
+        )
+    from zoneinfo import ZoneInfo
+
+    at = datetime.now(timezone.utc) + timedelta(hours=2)
+    hkt_today = at.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+    Catalogue(seeded.db).commit_issuer(
+        "alpha",
+        [event("alpha", "ALPHA", date=hkt_today)],
+        run_id="enrich-test",
+    )
+    alice_brief = [n for n in notices(seeded, "alice", at=at) if n[1] == "brief"][0][2]
+    bob_weekly = [n for n in notices(seeded, "bob", at=at) if n[1] == "weekly_brief"][0][2]
+
+    assert alice_brief["timezone"] == "Asia/Hong_Kong"
+    assert alice_brief["has_holdings"] is False
+    assert alice_brief["events"][0]["why_followed"] == ["watchlist"]
+    assert alice_brief["events"][0]["issuer_name"]
+
+    assert bob_weekly["timezone"] == "Asia/Hong_Kong"
+    assert bob_weekly["has_holdings"] is True
+    assert bob_weekly["events"][0]["why_followed"] == ["holding"]
+    assert bob_weekly["events"][0]["issuer_name"]
+
+    # Also verify results and urgent payload enrichment.
+    ev_id = bob_weekly["events"][0]["id"]
+    Catalogue(seeded.db).put_document(
+        {
+            "id": "doc-rel-1",
+            "event_id": ev_id,
+            "url": "https://alpha.example/q2-release.pdf",
+            "title": "Q2 Press Release",
+            "role": "release",
+            "verified": True,
+            "sha256": "",
+            "first_seen": (at - timedelta(minutes=5)).isoformat(),
+        }
+    )
+    results_payload = [n for n in notices(seeded, "bob", at=at) if n[1] == "results"][0][2]
+    assert results_payload["timezone"] == "Asia/Hong_Kong"
+    assert results_payload["has_holdings"] is True
+    assert results_payload["event"]["why_followed"] == ["holding"]
+    assert results_payload["event"]["issuer_name"]
+
+    Catalogue(seeded.db).commit_issuer(
+        "alpha",
+        [event("alpha", "ALPHA", date=hkt_today + timedelta(days=1))],
+        run_id="urgent-enrich",
+    )
+    with connect(seeded.db, write=True) as db:
+        db.execute(
+            "UPDATE event_revisions SET at=? WHERE seq=(SELECT max(seq) FROM event_revisions)",
+            ((at - timedelta(minutes=20)).isoformat(),),
+        )
+    prof_b = accounts.profile(seeded.db, "bob")
+    accounts.preferences(
+        seeded.db,
+        "bob",
+        prof_b["revision"],
+        prof_b["settings"] | {"urgent": True},
+        "Asia/Hong_Kong",
+    )
+    urgent_payload = [n for n in notices(seeded, "bob", at=at) if n[1] == "urgent"][0][2]
+    assert urgent_payload["timezone"] == "Asia/Hong_Kong"
+    assert urgent_payload["has_holdings"] is True
+    assert urgent_payload["event"]["why_followed"] == ["holding"]
+    assert urgent_payload["event"]["issuer_name"]
+
+
+async def test_digests_delivery_history_isolation_and_brief_preview(seeded):
+    PersonalStore(seeded.db, "alice").watch("ALPHA", "XNAS")
+    # Add a second source held only by alice (simulating residual holdings after revocation).
+    cat = Catalogue(seeded.db)
+    cat.put_source(source("holdco", "HOLDCO", exchange="XNAS"))
+    sync_holdings(seeded.db, "alice", "portfolio", [{"ticker": "HOLDCO", "exchange": "XNAS"}])
+    sync_holdings(seeded.db, "bob", "portfolio", [{"ticker": "ALPHA", "exchange": "XNAS"}])
+
+    prof_a = accounts.profile(seeded.db, "alice")
+    accounts.preferences(
+        seeded.db,
+        "alice",
+        prof_a["revision"],
+        prof_a["settings"] | {"brief": True, "weekly_brief": True, "hour": 0},
+        "UTC",
+    )
+    today = datetime.now(timezone.utc).date()
+    cat.commit_issuer(
+        "holdco",
+        [event("holdco", "HOLDCO", date=today)],
+        run_id="holdco-rev",
+    )
+    holdco_ev = [e for e in cat.events() if e["issuer_key"] == "holdco"][0]
+    cat.put_document(
+        {
+            "id": "holdco-doc-1",
+            "event_id": holdco_ev["id"],
+            "url": "https://holdco.example/q4-release.pdf",
+            "title": "Secret Holding Press Release",
+            "role": "release",
+            "verified": True,
+            "sha256": "",
+            "first_seen": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+    from earnings_watch.outbox import enqueue
+
+    # Seed 20 older sent deliveries, 1 active unknown delivery, legacy/migration rows, and bob's row.
+    with connect(seeded.db, write=True) as db:
+        for idx in range(1, 21):
+            db.execute(
+                "INSERT INTO deliveries(person,key,kind,state,payload,sent_at) VALUES(?,?,?,'sent','{}',?)",
+                ("alice", f"brief:2026-10-{idx:02d}", "brief", f"2026-10-{idx:02d}T08:00:00+00:00"),
+            )
+        db.execute(
+            "INSERT INTO deliveries(person,key,kind,state,payload) VALUES('alice','legacy-state','brief','archived','{}')"
+        )
+        db.execute(
+            "INSERT INTO deliveries(person,key,kind,state,payload) VALUES('alice','brief:migrated','brief','suppressed_by_migration','{}')"
+        )
+    enqueue(seeded.db, "alice", "brief:2026-11-26", "brief", {"day": "2026-11-26", "events": []})
+    with connect(seeded.db, write=True) as db:
+        db.execute(
+            "UPDATE deliveries SET state='unknown' WHERE person='alice' AND key='brief:2026-11-26'"
+        )
+    enqueue(seeded.db, "bob", "brief:2026-11-25", "brief", {"day": "2026-11-25", "events": []})
+
+    auth = _browser(seeded, "alice")
+    directory = _Directory(
+        {"alice": {"admitted": True, "disabled": False, "portfolio_admitted": False}}
+    )
+    app = create_app(seeded, auth=auth, directory=directory)
+    async with (
+        app.earnings_app.router.lifespan_context(app.earnings_app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            cookies={auth.cookie: "a" * 43},
+        ) as client,
+    ):
+        digests = await client.get("/connections/?view=digests")
+        assert digests.status_code == 200
+        assert "Preview next brief" in digests.text
+        assert "Recent Earnings Deliveries" in digests.text
+        # Active unknown delivery must remain visible at top even with 20 sent rows.
+        assert "brief:2026-11-26" in digests.text
+        assert "Waiting review" in digests.text
+        # Legacy, migration-suppressed, and bob's rows must never appear.
+        assert "legacy-state" not in digests.text
+        assert "brief:migrated" not in digests.text
+        assert "brief:2026-11-25" not in digests.text
+
+        seen_before = accounts.profile(seeded.db, "alice")["seen_seq"]
+        preview = await client.get("/connections/?view=preview")
+        assert preview.status_code == 200
+        assert "Back to Digests" in preview.text
+        assert "hub-preview-text" in preview.text
+        # Holding-only event, document, and revision must NEVER leak when portfolio_admitted=False.
+        assert "HOLDCO" not in preview.text
+        assert "Secret Holding Press Release" not in preview.text
+        assert "holdco.example" not in preview.text
+        # Preview must obey CSP (only signin-window's single hashed script).
+        assert "content-security-policy" in preview.headers
+        assert preview.text.count("<script") == 1
+        # Preview is non-mutating.
+        assert accounts.profile(seeded.db, "alice")["seen_seq"] == seen_before

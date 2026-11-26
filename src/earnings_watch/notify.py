@@ -179,7 +179,9 @@ def urgent_transition(db, identifier):
     return None
 
 
-def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str, str, dict]]:
+def notices(
+    settings, person: str, at: datetime | None = None, *, include_holdings: bool = True
+) -> list[tuple[str, str, dict]]:
     """Preview is nonmutating. Unknown submissions never generate replacement effects."""
     at = at or datetime.now(timezone.utc)
     pref = profile(settings.db, person)
@@ -187,8 +189,31 @@ def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str
     local = at.astimezone(zone)
     today = local.date()
     service = open_service(settings, person)
-    keys = {r["source_key"] for r in effective_follows(settings.db, person)}
-    events = [e for e in service.library.events() if e["issuer_key"] in keys]
+    follows = effective_follows(settings.db, person)
+    if not include_holdings:
+        follows = [r for r in follows if not r["origin"].startswith("holdings:")]
+    keys = {r["source_key"] for r in follows}
+    has_holdings = any(r["origin"].startswith("holdings:") for r in follows)
+    why_by_source: dict[str, set[str]] = {}
+    for row in follows:
+        sk = row["source_key"]
+        if sk:
+            why_by_source.setdefault(sk, set()).add(
+                "holding" if row["origin"].startswith("holdings:") else "watchlist"
+            )
+    issuer_names = {s.key: s.name for s in service.library.sources()}
+
+    def _enrich(ev: dict) -> dict:
+        enriched = dict(ev)
+        ik = ev.get("issuer_key", "")
+        if ik in why_by_source:
+            enriched["why_followed"] = sorted(why_by_source[ik])
+        if issuer_names.get(ik):
+            enriched["issuer_name"] = issuer_names[ik]
+        return enriched
+
+    events = [_enrich(e) for e in service.library.events() if e["issuer_key"] in keys]
+    common_meta = {"timezone": pref["timezone"], "has_holdings": has_holdings}
     documents = [
         d
         for d in service.library.documents()
@@ -249,7 +274,12 @@ def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str
                     # Pending initial payload can gather documents; uncertain sends remain immutable.
                     if previous["state"] == "pending":
                         result.append(
-                            (key, "results", {"event": event, "documents": docs, "day": str(today)})
+                            (
+                                key,
+                                "results",
+                                {"event": event, "documents": docs, "day": str(today)}
+                                | common_meta,
+                            )
                         )
                     continue
                 initial = json.loads(previous["payload"])
@@ -257,7 +287,13 @@ def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str
                 if initial["day"] != str(today) or not any(d["id"] not in old_ids for d in docs):
                     continue
                 key = "results:" + event["id"] + ":followup"
-            result.append((key, "results", {"event": event, "documents": docs, "day": str(today)}))
+            result.append(
+                (
+                    key,
+                    "results",
+                    {"event": event, "documents": docs, "day": str(today)} | common_meta,
+                )
+            )
     changes = [r for r in all_changes if r["doc"].get("issuer_key") in keys and r["at"] > cutoff]
     if pref["settings"]["urgent"]:
         # Brief submission must never consume changes still in urgent coalescing.
@@ -299,11 +335,12 @@ def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str
                     "urgent:" + digest([change["event_id"], change["seq"]]),
                     "urgent",
                     {
-                        "event": current,
+                        "event": _enrich(current),
                         "previous": old,
                         "change": change["change"],
                         "sequence": change["seq"],
-                    },
+                    }
+                    | common_meta,
                 )
             )
     if (
@@ -325,7 +362,8 @@ def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str
                         "documents": brief_docs,
                         "sequence": all_changes[-1]["seq"] if all_changes else cursor,
                         "cutoff": at.isoformat(),
-                    },
+                    }
+                    | common_meta,
                 )
             )
     if (
@@ -358,7 +396,8 @@ def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str
                         "changes": weekly_changes[-100:],
                         "documents": weekly_docs,
                         "cutoff": at.isoformat(),
-                    },
+                    }
+                    | common_meta,
                 )
             )
     return [

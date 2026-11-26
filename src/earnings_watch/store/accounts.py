@@ -418,6 +418,21 @@ def remembered_email(path: Path, person: str) -> str:
         return str(row[0]) if row else ""
 
 
+def recent_deliveries(path: Path, person: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    bounded = max(1, min(limit, 50))
+    with connect(path) as db:
+        return [
+            dict(r)
+            for r in db.execute(
+                "SELECT key,kind,state,sent_at,attempts FROM deliveries "
+                "WHERE person=? AND key!='legacy-state' AND state!='suppressed_by_migration' "
+                "ORDER BY (sent_at IS NULL AND state IN ('pending','unknown')) DESC, "
+                "COALESCE(sent_at,'') DESC, rowid DESC LIMIT ?",
+                (person, bounded),
+            )
+        ]
+
+
 def news_mute(
     path: Path,
     person: str,
