@@ -77,8 +77,8 @@ class Source(BaseModel):
     @classmethod
     def _ticker(cls, value: str) -> str:
         value = value.strip()
-        if not re.fullmatch("[A-Z0-9]+", value):
-            raise ValueError("ticker must contain only uppercase letters and digits")
+        if not re.fullmatch(r"[A-Z0-9](?:[A-Z0-9.\-]{0,18}[A-Z0-9])?", value):
+            raise ValueError("ticker must contain only uppercase letters, digits, dots, or hyphens")
         return value
 
     @field_validator("issuer", "name", "calendar_url")

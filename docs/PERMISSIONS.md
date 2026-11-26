@@ -30,7 +30,7 @@ a standalone account is an operator responsibility.
 Each browser form checks the exact Origin and current record revision. Holdings
 imports require a signed, person-bound preview and atomic revision check. They
 store company identities only, discarding quantities and financial values. Mutes
-survive holdings refreshes. Registration has daily and five-pending person caps.
+survive holdings refreshes. Registration has per-person daily and pending caps (100 each).
 
 Calendar subscriptions use random bearer URLs stored by hash. Resetting a link
 revokes its predecessor. With the directory enabled, group removal or disabled

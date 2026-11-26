@@ -62,11 +62,15 @@ class PersonService:
         )
         from .presentation import present
 
-        selected = [present(e, self.person, self.library) for e in selected]
+        sources_by_key = {s.key: s for s in self.library.sources()}
+        selected = [
+            present(e, self.person, self.library, sources_by_key=sources_by_key) for e in selected
+        ]
         # The compact view stays within the MCP response budget.
         fields = {
             "id",
             "ticker",
+            "company_name",
             "type",
             "period",
             "date",
@@ -86,6 +90,59 @@ class PersonService:
         return {
             "events": [{k: v for k, v in row.items() if k in fields} for row in selected],
             "cursor": next_cursor,
+            **self._freshness(),
+        }
+
+    def recent(
+        self,
+        days: int = 14,
+        tickers: list[str] | None = None,
+        types: list[str] | None = None,
+        limit: int = 100,
+        scope: str = "following",
+    ) -> dict[str, Any]:
+        if not 1 <= days <= 90 or not 1 <= limit <= 100 or (tickers and len(tickers) > 20):
+            raise EarningsError("invalid_argument", "days, tickers or limit exceeds its budget")
+        today = datetime.now(timezone.utc).date()
+        lower = str(today - timedelta(days=days))
+        upper = str(today)
+        rows = [
+            row
+            for row in self._events(scope)
+            if lower <= row["date"] < upper
+            and (not tickers or row["ticker"] in tickers)
+            and (not types or row["type"] in types)
+        ]
+        rows.sort(key=lambda row: (row["date"], row["id"]), reverse=True)
+        selected = rows[:limit]
+        from .presentation import present
+
+        sources_by_key = {s.key: s for s in self.library.sources()}
+        selected = [
+            present(e, self.person, self.library, sources_by_key=sources_by_key) for e in selected
+        ]
+        fields = {
+            "id",
+            "ticker",
+            "company_name",
+            "type",
+            "period",
+            "date",
+            "time_hint",
+            "release_time",
+            "release_tz",
+            "timing_issue",
+            "status",
+            "source_url",
+            "revision",
+            "title",
+            "when",
+            "certainty",
+            "documents",
+            "why_followed",
+        }
+        return {
+            "events": [{k: v for k, v in row.items() if k in fields} for row in selected],
             **self._freshness(),
         }
 
@@ -157,8 +214,10 @@ class PersonService:
         exchange: str | None = None,
         isin: str | None = None,
         name: str | None = None,
+        *,
+        ir_url: str | None = None,
     ) -> dict[str, Any]:
-        return self.person.watch(ticker, exchange or "", isin=isin, name=name)
+        return self.person.watch(ticker, exchange or "", isin=isin, name=name, ir_url=ir_url)
 
     def unwatch(self, ticker: str, exchange: str | None = None) -> dict[str, Any]:
         return self.person.unwatch(ticker, exchange or "")

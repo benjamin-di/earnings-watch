@@ -369,15 +369,17 @@ async def test_gateway_provisions_only_verified_subject(seeded, monkeypatch):
 
 
 def test_pending_request_cap_and_mutes_survive_holdings_refresh(seeded):
+    from earnings_watch.store.database import MAX_PENDING_REGISTRATIONS
+
     accounts.provision(seeded.db, "alice")
     person = PersonalStore(seeded.db, "alice")
     # Spread across days only for this quota-independent pending-limit test.
-    for i in range(5):
+    for i in range(MAX_PENDING_REGISTRATIONS):
         person.watch("NEW" + str(i))
         with connect(seeded.db, write=True) as db:
             db.execute("DELETE FROM registration_quotas WHERE person='alice'")
-    with pytest.raises(EarningsError, match="five"):
-        person.watch("SIXTH")
+    with pytest.raises(EarningsError, match=str(MAX_PENDING_REGISTRATIONS)):
+        person.watch("OVERCAP")
 
 
 def test_archive_effects_does_not_claim_sent_or_adopt_remote_ids(settings, tmp_path):

@@ -232,6 +232,8 @@ def archive_effects(path: Path, person: str, receipt: dict) -> dict:
 
 
 def replace_preview(settings, person: str, value: dict) -> dict:
+    from .database import MAX_DAILY_REGISTRATIONS, MAX_PENDING_REGISTRATIONS
+
     with connect(settings.db, write=True) as db:
         changed = db.execute(
             "UPDATE profiles SET revision=revision+1 WHERE person=? AND revision=?",
@@ -239,7 +241,8 @@ def replace_preview(settings, person: str, value: dict) -> dict:
         )
         if not changed.rowcount:
             raise EarningsError("conflict", "Import preview is stale. Preview again.")
-        prepared = []
+        ts = now()
+        prepared_map: dict[tuple[str, str], tuple[str, str, str, str, str]] = {}
         for row in value["items"]:
             source = db.execute(
                 "SELECT key FROM sources WHERE ticker=? AND exchange=?",
@@ -247,18 +250,92 @@ def replace_preview(settings, person: str, value: dict) -> dict:
             ).fetchone()
             if not source:
                 raise EarningsError("not_found", "Company catalogue changed. Preview again.")
-            prepared.append((person, source[0], row["ticker"], row["exchange"], now()))
+            prepared_map[(row["ticker"], row["exchange"])] = (
+                person,
+                source[0],
+                row["ticker"],
+                row["exchange"],
+                ts,
+            )
+        queued = []
+        for row in value.get("unlisted") or []:
+            row_isin = row.get("isin")
+            matches = db.execute(
+                "SELECT key,ticker,exchange FROM sources "
+                "WHERE (ticker=? OR (? IS NOT NULL AND json_extract(doc,'$.isin')=?)) "
+                "AND (?='' OR exchange=?)",
+                (row["ticker"], row_isin, row_isin, row["exchange"], row["exchange"]),
+            ).fetchall()
+            if len(matches) > 1:
+                raise EarningsError(
+                    "ambiguous", "Company catalogue changed with multiple exchanges. Preview again."
+                )
+            if matches:
+                m = matches[0]
+                prepared_map[(m["ticker"], m["exchange"])] = (
+                    person,
+                    m["key"],
+                    m["ticker"],
+                    m["exchange"],
+                    ts,
+                )
+            else:
+                queued.append(
+                    (
+                        person,
+                        row["ticker"],
+                        row["exchange"],
+                        encode({"isin": row_isin, "name": None}),
+                        ts,
+                    )
+                )
+        prepared = list(prepared_map.values())
         others = db.execute(
             "SELECT count(*) FROM follows WHERE person=? AND origin!='holdings:upload'", (person,)
         ).fetchone()[0]
-        if len(prepared) + others > 200:
+        if len(prepared) + len(queued) + others > 200:
             raise EarningsError("over_cap", "Follow limit reached.")
+        if queued:
+            other_pending = db.execute(
+                "SELECT count(*) FROM follows WHERE person=? AND origin!='holdings:upload' AND state='queued'",
+                (person,),
+            ).fetchone()[0]
+            if len(queued) + other_pending > MAX_PENDING_REGISTRATIONS:
+                raise EarningsError(
+                    "over_cap",
+                    f"At most {MAX_PENDING_REGISTRATIONS} company requests can be pending at once.",
+                )
+            existing_queued_upload = {
+                (r[0], r[1])
+                for r in db.execute(
+                    "SELECT ticker,exchange FROM follows WHERE person=? AND origin='holdings:upload' AND state='queued'",
+                    (person,),
+                )
+            }
+            new_count = sum(1 for row in queued if (row[1], row[2]) not in existing_queued_upload)
+            if new_count:
+                day = ts[:10]
+                quota = db.execute(
+                    "SELECT used FROM registration_quotas WHERE person=? AND day=?",
+                    (person, day),
+                ).fetchone()
+                used = quota[0] if quota else 0
+                if used + new_count > MAX_DAILY_REGISTRATIONS:
+                    raise EarningsError("over_cap", "Daily registration limit reached.")
+                db.execute(
+                    "INSERT INTO registration_quotas VALUES(?,?,?) ON CONFLICT(person,day) DO UPDATE SET used=used+excluded.used",
+                    (person, day, new_count),
+                )
         db.execute("DELETE FROM follows WHERE person=? AND origin='holdings:upload'", (person,))
         db.executemany(
-            "INSERT INTO follows(person,source_key,ticker,exchange,origin,state,added_at) VALUES(?,?,?,?,'holdings:upload','registered',?)",
+            "INSERT OR IGNORE INTO follows(person,source_key,ticker,exchange,origin,state,added_at) VALUES(?,?,?,?,'holdings:upload','registered',?)",
             prepared,
         )
-    return {"follows": len(prepared)}
+        db.executemany(
+            "INSERT OR IGNORE INTO follows(person,source_key,ticker,exchange,origin,state,hints,added_at) VALUES(?,NULL,?,?,'holdings:upload','queued',?,?)",
+            queued,
+        )
+    return {"follows": len(prepared), "queued": len(queued)}
 
 
 def changed_ids(path: Path, person: str, after: int, through: int) -> set[str]:

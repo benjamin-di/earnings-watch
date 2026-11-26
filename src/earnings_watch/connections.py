@@ -135,7 +135,11 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 if row["origin"].startswith("holdings:") and feed != "upload" and synced:
                     state = "Holding · Synced from your portfolio, " + synced[:10]
                 if row["state"] == "queued":
-                    state = "Adding · usually within a day"
+                    state = (
+                        "Adding · " + row["reason"]
+                        if row.get("reason")
+                        else "Adding · usually within minutes"
+                    )
                 exact = (row["ticker"], row["exchange"]) in muted
                 every = (row["ticker"], "") in muted
                 is_muted = exact or every
@@ -155,13 +159,18 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     if is_muted
                     else ("mute" if row["origin"].startswith("holdings:") else "unwatch")
                 )
+                label_name = (
+                    html.escape(row["company_name"]) + " · " if row.get("company_name") else ""
+                )
                 companies.append(
-                    "<li><strong>"
+                    "<li>"
+                    + label_name
+                    + "<strong>"
                     + html.escape(row["ticker"])
                     + "</strong> "
                     + html.escape(row["exchange"])
                     + " · "
-                    + state
+                    + html.escape(state)
                     + (" · Muted" if is_muted else "")
                     + '<form method="post" action="/connections/'
                     + action
@@ -185,11 +194,11 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             add = (
                 '<form method="post" action="/connections/watch">'
                 + form_fields(profile)
-                + '<label>Company ticker or ISIN <input name="ticker" list="companies" required maxlength="20" autocomplete="off"></label><datalist id="companies">'
+                + '<label>Company ticker or ISIN <input name="ticker" list="companies" required maxlength="100" autocomplete="off"></label><datalist id="companies">'
                 + options
                 + '</datalist><label>Exchange (optional MIC)<input name="exchange" maxlength="4"></label>'
                 + button("Add to watchlist")
-                + "<p>Not listed? Add its ticker to request it. Up to five requests can be pending.</p></form>"
+                + "<p>Not listed? Add its ticker to request it. Up to 100 requests can be pending.</p></form>"
             )
             upload = (
                 '<details><summary>Import holdings</summary><p>Paste tickers or MIC:TICKER, or upload a CSV with ticker and exchange columns. Quantities and values are discarded. Review changes before replacing uploaded holdings; your synced portfolio and watchlist are kept.</p><form method="post" action="/connections/import-preview" enctype="multipart/form-data">'
@@ -264,7 +273,8 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 + button("Sign out")
                 + "</form>"
             )
-            accounts.mark_seen(settings.db, person, page_seq)
+            if request.query_params.get("keep_seen") != "1":
+                accounts.mark_seen(settings.db, person, page_seq)
             return HTMLResponse(
                 page(
                     "Earnings", body, intro="The dates and documents for companies you care about."
@@ -313,8 +323,12 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     str(form.get("timezone")),
                 )
             elif action == "watch":
+                ir_url = str(form.get("ir_url", "")).strip() or None
                 result = PersonalStore(settings.db, person).watch(
-                    ticker, exchange, isin=ticker if len(ticker) == 12 else None, revision=revision
+                    str(form.get("ticker", "")).strip(),
+                    exchange,
+                    ir_url=ir_url,
+                    revision=revision,
                 )
                 if result["state"] == "ambiguous":
                     exchanges = sorted({r["exchange"] for r in result["candidates"]})
@@ -323,6 +337,12 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                         f"Choose an exchange for {ticker}: {', '.join(exchanges)}. "
                         "Enter its MIC in the Exchange field.",
                     )
+            elif action == "mark-seen":
+                current_seq = Catalogue(settings.db).status()["sequence"]
+                raw_seq = str(form.get("seen_seq", "")).strip()
+                target_seq = min(int(raw_seq), current_seq) if raw_seq else current_seq
+                accounts.mark_seen(settings.db, person, max(0, target_seq))
+                return RedirectResponse("/connections/", 303)
             elif action == "unwatch":
                 PersonalStore(settings.db, person).unwatch(ticker, exchange, revision=revision)
             elif action in ("mute", "unmute"):
@@ -348,6 +368,22 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                             "invalid_argument", "Upload a UTF-8 CSV or plain text file."
                         ) from None
                 result = interests.preview(settings, person, text)
+                unlisted_html = ""
+                if result.get("unlisted"):
+                    unlisted_html = (
+                        "<p>Will queue "
+                        + str(len(result["unlisted"]))
+                        + " unlisted companies for automatic registration:</p><ul>"
+                        + "".join(
+                            "<li>"
+                            + html.escape(
+                                (r["ticker"] + (" " + r["exchange"] if r["exchange"] else ""))
+                            )
+                            + "</li>"
+                            for r in result["unlisted"]
+                        )
+                        + "</ul>"
+                    )
                 body = (
                     "<p>Adds "
                     + str(result["adds"])
@@ -358,7 +394,9 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                         "<li>" + html.escape(r["ticker"] + " " + r["exchange"]) + "</li>"
                         for r in result["items"]
                     )
-                    + '</ul><form method="post" action="/connections/import-apply">'
+                    + "</ul>"
+                    + unlisted_html
+                    + '<form method="post" action="/connections/import-apply">'
                     + form_fields(accounts.profile(settings.db, person))
                     + '<input type="hidden" name="handle" value="'
                     + html.escape(result["handle"], quote=True)
@@ -373,7 +411,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 interests.apply(settings, person, str(form.get("handle", "")))
             else:
                 return Response("Unknown action.", 404)
-            return RedirectResponse("/connections/", 303)
+            return RedirectResponse("/connections/?keep_seen=1", 303)
         except (EarningsError, ValueError, KeyError) as exc:
             return HTMLResponse(
                 page(

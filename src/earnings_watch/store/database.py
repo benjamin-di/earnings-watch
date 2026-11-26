@@ -17,9 +17,18 @@ from typing import Any, Iterator
 from earnings_watch.errors import EarningsError
 from earnings_watch.model.events import Event
 from earnings_watch.model.sources import Source
+from earnings_watch.symbols import (
+    is_valid_exchange,
+    is_valid_isin,
+    is_valid_ticker,
+    parse_symbol,
+    validate_ir_url,
+)
 
 Row = dict[str, Any]
 SCHEMA = 3
+MAX_PENDING_REGISTRATIONS = 100
+MAX_DAILY_REGISTRATIONS = 100
 
 
 def now() -> str:
@@ -248,12 +257,27 @@ class Catalogue(LibraryReader):
                     db.execute("DELETE FROM follows WHERE id=?", (row["id"],))
                 else:
                     db.execute(
-                        "UPDATE follows SET source_key=?,ticker=?,exchange=?,state='registered' WHERE id=?",
+                        "UPDATE follows SET source_key=?,ticker=?,exchange=?,state='registered',reason='' WHERE id=?",
                         (source.key, source.ticker, source.exchange or "", row["id"]),
                     )
                 db.execute(
                     "UPDATE profiles SET revision=revision+1 WHERE person=?", (row["person"],)
                 )
+
+    def has_pending_registrations(self) -> bool:
+        with connect(self.path) as db:
+            return (
+                db.execute("SELECT 1 FROM follows WHERE source_key IS NULL LIMIT 1").fetchone()
+                is not None
+            )
+
+    def record_registration_error(self, ticker: str, exchange: str, reason: str) -> None:
+        cleaned = reason.strip()[:240]
+        with connect(self.path, write=True) as db:
+            db.execute(
+                "UPDATE follows SET reason=? WHERE source_key IS NULL AND ticker=? AND exchange=?",
+                (cleaned, ticker, exchange),
+            )
 
     def commit_issuer(
         self,
@@ -480,7 +504,10 @@ class PersonalStore:
             return [
                 dict(row)
                 for row in db.execute(
-                    "SELECT source_key,ticker,exchange,origin,state,reason,hints FROM follows WHERE person=? ORDER BY ticker,exchange,origin",
+                    "SELECT f.source_key,f.ticker,f.exchange,f.origin,f.state,f.reason,f.hints,"
+                    "coalesce(json_extract(s.doc,'$.name'),json_extract(f.hints,'$.name'),'') AS company_name "
+                    "FROM follows f LEFT JOIN sources s ON s.key=f.source_key "
+                    "WHERE f.person=? ORDER BY f.ticker,f.exchange,f.origin",
                     (self.person,),
                 )
             ]
@@ -493,33 +520,110 @@ class PersonalStore:
         origin: str = "manual",
         isin: str | None = None,
         name: str | None = None,
+        ir_url: str | None = None,
         revision: int | None = None,
     ) -> Row:
-        ticker = ticker.upper().strip()
-        if isin and not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}[0-9]", isin):
-            raise EarningsError("invalid_argument", "invalid ISIN")
-        if not re.fullmatch(r"[A-Z0-9]{1,20}", ticker) or (
-            exchange and not re.fullmatch(r"[A-Z0-9]{4}", exchange)
-        ):
+        raw_input = ticker.strip()
+        explicit_exchange = exchange.strip().upper()
+        if explicit_exchange and not is_valid_exchange(explicit_exchange):
             raise EarningsError("invalid_argument", "invalid ticker or exchange")
+        if isin and not is_valid_isin(isin):
+            raise EarningsError("invalid_argument", "invalid ISIN")
+        cleaned_ir_url = validate_ir_url(ir_url) if ir_url and ir_url.strip() else None
         with connect(self.path, write=True) as db:
             check_revision(db, self.person, revision)
-            matches = list(
-                db.execute(
-                    "SELECT key,ticker,exchange FROM sources WHERE (ticker=? OR json_extract(doc,'$.isin')=?) AND (?='' OR exchange=?)",
-                    (ticker, isin or ticker, exchange, exchange),
+            matches: list[sqlite3.Row] = []
+            # Check exact company-name match before symbol parsing so names with ':' or '.CO' match cleanly.
+            if raw_input:
+                needle = raw_input.casefold()
+                all_sources = list(
+                    db.execute(
+                        "SELECT key,ticker,exchange,json_extract(doc,'$.name') AS name FROM sources "
+                        "WHERE (?='' OR exchange=?)",
+                        (explicit_exchange, explicit_exchange),
+                    )
                 )
-            )
+                matches = [r for r in all_sources if (r["name"] or "").casefold() == needle]
+            if matches:
+                parsed_ticker, parsed_exchange = matches[0]["ticker"], matches[0]["exchange"]
+            else:
+                parsed_ticker, parsed_exchange = parse_symbol(ticker, exchange)
+                if isin is None and is_valid_isin(parsed_ticker):
+                    isin = parsed_ticker
+                if parsed_exchange and not is_valid_exchange(parsed_exchange):
+                    raise EarningsError("invalid_argument", "invalid ticker or exchange")
+                matches = list(
+                    db.execute(
+                        "SELECT key,ticker,exchange,json_extract(doc,'$.name') AS name FROM sources "
+                        "WHERE (ticker=? OR json_extract(doc,'$.isin')=?) AND (?='' OR exchange=?)",
+                        (parsed_ticker, isin or parsed_ticker, parsed_exchange, parsed_exchange),
+                    )
+                )
+                # Only allow substring company-name fallback when the input is not a valid ticker/ISIN,
+                # so short real tickers (e.g. ON, MP, T, APP) are never hijacked by existing company names.
+                if (
+                    not matches
+                    and raw_input
+                    and not is_valid_ticker(parsed_ticker)
+                    and not is_valid_isin(parsed_ticker)
+                ):
+                    needle = raw_input.casefold()
+                    all_sources = list(
+                        db.execute(
+                            "SELECT key,ticker,exchange,json_extract(doc,'$.name') AS name FROM sources "
+                            "WHERE (?='' OR exchange=?)",
+                            (explicit_exchange, explicit_exchange),
+                        )
+                    )
+                    matches = [r for r in all_sources if needle in (r["name"] or "").casefold()]
             if len(matches) > 1:
                 return {"state": "ambiguous", "candidates": [dict(row) for row in matches]}
             if matches:
-                ticker, exchange = matches[0]["ticker"], matches[0]["exchange"]
+                parsed_ticker, parsed_exchange = matches[0]["ticker"], matches[0]["exchange"]
+            elif not is_valid_ticker(parsed_ticker):
+                raise EarningsError("invalid_argument", "invalid ticker or exchange")
             existing = db.execute(
-                "SELECT state FROM follows WHERE person=? AND ticker=? AND exchange=? AND origin=?",
-                (self.person, ticker, exchange, origin),
+                "SELECT id,state,hints,origin FROM follows WHERE person=? AND ticker=? AND exchange=? AND origin=?",
+                (self.person, parsed_ticker, parsed_exchange, origin),
             ).fetchone()
+            # When updating an IR URL hint, also find an existing queued holding (e.g. holdings:upload)
+            # owned by this person so we update it in place instead of creating a duplicate manual row.
+            if existing is None and cleaned_ir_url and not matches:
+                existing = db.execute(
+                    "SELECT id,state,hints,origin FROM follows WHERE person=? AND ticker=? AND exchange=? AND state='queued' ORDER BY id ASC LIMIT 1",
+                    (self.person, parsed_ticker, parsed_exchange),
+                ).fetchone()
             if existing:
-                return {"state": existing[0]}
+                if existing["state"] == "queued" and cleaned_ir_url:
+                    hints = json.loads(existing["hints"] or "{}")
+                    if hints.get("ir_url") == cleaned_ir_url and (
+                        not name or hints.get("name") == name
+                    ):
+                        return {"state": "queued", "source_key": None, "updated": False}
+                    day = now()[:10]
+                    quota = db.execute(
+                        "SELECT used FROM registration_quotas WHERE person=? AND day=?",
+                        (self.person, day),
+                    ).fetchone()
+                    if quota and quota[0] >= MAX_DAILY_REGISTRATIONS:
+                        raise EarningsError("over_cap", "daily registration limit reached")
+                    db.execute(
+                        "INSERT INTO registration_quotas VALUES(?,?,1) ON CONFLICT(person,day) DO UPDATE SET used=used+1",
+                        (self.person, day),
+                    )
+                    hints["ir_url"] = cleaned_ir_url
+                    hints["hint_updated_at"] = now()
+                    if name:
+                        hints["name"] = name
+                    db.execute(
+                        "UPDATE follows SET hints=?,reason='' WHERE id=?",
+                        (encode(hints), existing["id"]),
+                    )
+                    db.execute(
+                        "UPDATE profiles SET revision=revision+1 WHERE person=?", (self.person,)
+                    )
+                    return {"state": "queued", "source_key": None, "updated": True}
+                return {"state": existing["state"]}
             if (
                 db.execute(
                     "SELECT count(*) FROM follows WHERE person=?", (self.person,)
@@ -533,14 +637,17 @@ class PersonalStore:
                         "SELECT count(*) FROM follows WHERE person=? AND state='queued'",
                         (self.person,),
                     ).fetchone()[0]
-                    >= 5
+                    >= MAX_PENDING_REGISTRATIONS
                 ):
-                    raise EarningsError("over_cap", "five company requests are already pending")
+                    raise EarningsError(
+                        "over_cap",
+                        f"at most {MAX_PENDING_REGISTRATIONS} company requests can be pending at once",
+                    )
                 quota = db.execute(
                     "SELECT used FROM registration_quotas WHERE person=? AND day=?",
                     (self.person, now()[:10]),
                 ).fetchone()
-                if quota and quota[0] >= 3:
+                if quota and quota[0] >= MAX_DAILY_REGISTRATIONS:
                     raise EarningsError("over_cap", "daily registration limit reached")
                 db.execute(
                     "INSERT INTO registration_quotas VALUES(?,?,1) ON CONFLICT(person,day) DO UPDATE SET used=used+1",
@@ -548,16 +655,19 @@ class PersonalStore:
                 )
             key = matches[0]["key"] if matches else None
             state = "registered" if key else "queued"
+            hints_doc: dict[str, Any] = {"isin": isin, "name": name}
+            if cleaned_ir_url:
+                hints_doc["ir_url"] = cleaned_ir_url
             db.execute(
                 "INSERT INTO follows(person,source_key,ticker,exchange,origin,state,hints,added_at) VALUES(?,?,?,?,?,?,?,?)",
                 (
                     self.person,
                     key,
-                    ticker,
-                    exchange,
+                    parsed_ticker,
+                    parsed_exchange,
                     origin,
                     state,
-                    encode({"isin": isin, "name": name}),
+                    encode(hints_doc),
                     now(),
                 ),
             )
@@ -565,22 +675,23 @@ class PersonalStore:
             return {"state": state, "source_key": key}
 
     def unwatch(self, ticker: str, exchange: str = "", *, revision: int | None = None) -> Row:
+        parsed_ticker, parsed_exchange = parse_symbol(ticker, exchange)
         with connect(self.path, write=True) as db:
             check_revision(db, self.person, revision)
             holding = db.execute(
                 "SELECT 1 FROM follows WHERE person=? AND ticker=? AND (?='' OR exchange=?) AND origin LIKE 'holdings:%'",
-                (self.person, ticker.upper(), exchange, exchange),
+                (self.person, parsed_ticker, parsed_exchange, parsed_exchange),
             ).fetchone()
             removed = db.execute(
                 "DELETE FROM follows WHERE person=? AND ticker=? AND (?='' OR exchange=?) AND origin='manual'",
-                (self.person, ticker.upper(), exchange, exchange),
+                (self.person, parsed_ticker, parsed_exchange, parsed_exchange),
             ).rowcount
             # Holdings and the watchlist are separate lists: only an unwatch that
             # removed no manual follow means "stop showing this holding".
             if holding and not removed:
                 db.execute(
                     "INSERT OR IGNORE INTO mutes VALUES(?,?,?)",
-                    (self.person, ticker.upper(), exchange),
+                    (self.person, parsed_ticker, parsed_exchange),
                 )
             db.execute("UPDATE profiles SET revision=revision+1 WHERE person=?", (self.person,))
         if holding and not removed:
@@ -749,10 +860,9 @@ def restore(path: Path, source: Path) -> None:
 def sync_holdings(path: Path, person: str, feed: str, entries: list[Row]) -> Row:
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", feed) or len(entries) > 200:
         raise EarningsError("invalid_argument", "invalid feed or holdings budget")
-    normalized = {(str(r["ticker"]).upper().strip(), r.get("exchange") or "") for r in entries}
+    normalized = {parse_symbol(str(r["ticker"]), str(r.get("exchange") or "")) for r in entries}
     if any(
-        not re.fullmatch(r"[A-Z0-9]{1,20}", ticker)
-        or (exchange and not re.fullmatch(r"[A-Z0-9]{4}", exchange))
+        not is_valid_ticker(ticker) or (exchange and not is_valid_exchange(exchange))
         for ticker, exchange in normalized
     ):
         raise EarningsError("invalid_argument", "invalid holdings identity")

@@ -147,12 +147,15 @@ def test_cursor_and_ics(seeded):
 
 
 def test_registration_quota_is_personal(settings):
+    from earnings_watch.store.database import MAX_DAILY_REGISTRATIONS
+
     alice, bob = open(settings, "alice"), open(settings, "bob")
-    for ticker in ["ONE", "TWO", "THREE"]:
-        assert alice.watch(ticker)["state"] == "queued"
+    for i in range(MAX_DAILY_REGISTRATIONS):
+        assert alice.watch(f"REQ{i}")["state"] == "queued"
+    alice.unwatch("REQ0")
     with pytest.raises(EarningsError, match="daily registration"):
-        alice.watch("FOUR")
-    assert bob.watch("FOUR")["state"] == "queued"
+        alice.watch("OVER")
+    assert bob.watch("OVER")["state"] == "queued"
 
 
 def test_personal_writes_do_not_modify_catalogue(seeded):
@@ -176,12 +179,15 @@ def test_calendar_plan_rejects_changed_follows(seeded):
 
 
 def test_removing_queued_follow_cannot_reset_registration_budget(settings):
+    from earnings_watch.store.database import MAX_DAILY_REGISTRATIONS
+
     service = open(settings)
-    for ticker in ["ONE", "TWO", "THREE"]:
+    for i in range(MAX_DAILY_REGISTRATIONS):
+        ticker = f"REQ{i}"
         service.watch(ticker)
         service.unwatch(ticker)
     with pytest.raises(EarningsError, match="daily registration"):
-        service.watch("FOUR")
+        service.watch("OVER")
 
 
 def test_unwatching_last_issuer_preserves_personal_calendar_entries(seeded):

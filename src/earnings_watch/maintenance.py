@@ -53,6 +53,37 @@ class Maintenance:
         self.transport = transport
         self.browser = browser
 
+    async def register(self, *, dry_run: bool = False) -> dict:
+        """Fast-path pending issuer registration without running a full daily sweep."""
+        settings = self.settings
+        with maintenance_lock(settings):
+            if (settings.data_dir / ".paused").exists():
+                return {"state": "paused", "exit": 3}
+            if not self.catalogue.has_pending_registrations():
+                return {"registered": [], "errors": [], "calls": 0}
+            from .providers import definitions
+            from .registration import register_pending
+
+            providers = {
+                name: value
+                for name, value in definitions().items()
+                if name in settings.provider_allowlist
+            }
+            extraction_enabled = not (
+                isinstance(self.runner, CliRunner)
+                and (not self.runner.backends or self.runner.backends[0] == "none")
+            )
+            if not extraction_enabled or "generic_ir" not in providers:
+                return {"registered": [], "errors": [], "calls": 0}
+            runner = BudgetRunner(self.runner, settings.max_calls_per_run)
+            return await register_pending(
+                settings,
+                self.catalogue,
+                runner,
+                cap=min(10, settings.max_calls_per_run),
+                dry_run=dry_run,
+            )
+
     async def sweep(
         self,
         *,

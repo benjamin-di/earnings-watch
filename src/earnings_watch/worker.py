@@ -45,6 +45,8 @@ async def run(settings: Settings) -> None:
                 if sweep_due(maintenance.catalogue.status(), now):
                     await maintenance.sweep()
                 else:
+                    if maintenance.catalogue.has_pending_registrations():
+                        await maintenance.register()
                     await maintenance.sweep(docs_only=True)
             except Exception:
                 # Retry on the next bounded tick; never retire the daily sweep.
