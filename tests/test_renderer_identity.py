@@ -271,7 +271,7 @@ async def test_every_owned_html_outcome_keeps_status_and_one_footer(
         assert response.headers["cache-control"] == "no-store"
     if outcome == "home":
         assert response.headers["referrer-policy"] == "no-referrer"
-        assert '<form method="post" action="/connections/watch">' in response.text
+        assert 'href="/connections/?view=companies"' in response.text
     if outcome == "preview":
         assert '<form method="post" action="/connections/import-apply">' in response.text
     if outcome == "denied":

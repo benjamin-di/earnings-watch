@@ -16,10 +16,14 @@ class PersonService:
     def __init__(self, library: LibraryReader, person: PersonalStore, signing_key: bytes):
         self.library, self.person, self.signing_key = library, person, signing_key
 
-    def _events(self, scope: str = "following") -> list[dict[str, Any]]:
+    def _events(
+        self, scope: str = "following", *, include_holdings: bool = True
+    ) -> list[dict[str, Any]]:
         if scope not in {"following", "all"}:
             raise EarningsError("invalid_argument", "scope must be following or all")
         follows = effective_follows(self.person.path, self.person.person)
+        if not include_holdings:
+            follows = [row for row in follows if not row["origin"].startswith("holdings:")]
         keys = {row["source_key"] for row in follows}
         return [row for row in self.library.events() if scope == "all" or row["issuer_key"] in keys]
 
@@ -31,13 +35,15 @@ class PersonService:
         limit: int = 100,
         cursor: str | None = None,
         scope: str = "following",
+        *,
+        include_holdings: bool = True,
     ) -> dict[str, Any]:
         if not 1 <= days <= 90 or not 1 <= limit <= 100 or (tickers and len(tickers) > 20):
             raise EarningsError("invalid_argument", "days, tickers or limit exceeds its budget")
         today = datetime.now(timezone.utc).date()
         rows = [
             row
-            for row in self._events(scope)
+            for row in self._events(scope, include_holdings=include_holdings)
             if str(today) <= row["date"] <= str(today + timedelta(days=days))
             and (not tickers or row["ticker"] in tickers)
             and (not types or row["type"] in types)
@@ -69,6 +75,7 @@ class PersonService:
         # The compact view stays within the MCP response budget.
         fields = {
             "id",
+            "issuer_key",
             "ticker",
             "company_name",
             "type",
@@ -100,6 +107,8 @@ class PersonService:
         types: list[str] | None = None,
         limit: int = 100,
         scope: str = "following",
+        *,
+        include_holdings: bool = True,
     ) -> dict[str, Any]:
         if not 1 <= days <= 90 or not 1 <= limit <= 100 or (tickers and len(tickers) > 20):
             raise EarningsError("invalid_argument", "days, tickers or limit exceeds its budget")
@@ -108,7 +117,7 @@ class PersonService:
         upper = str(today)
         rows = [
             row
-            for row in self._events(scope)
+            for row in self._events(scope, include_holdings=include_holdings)
             if lower <= row["date"] < upper
             and (not tickers or row["ticker"] in tickers)
             and (not types or row["type"] in types)
@@ -123,6 +132,7 @@ class PersonService:
         ]
         fields = {
             "id",
+            "issuer_key",
             "ticker",
             "company_name",
             "type",
@@ -236,8 +246,8 @@ class PersonService:
     def calendar_ack(self, handle: str, results: list[dict[str, Any]]) -> dict[str, Any]:
         return calendar.ack(self.person, handle, results, key=self.signing_key)
 
-    def calendar_ics(self) -> str:
-        return ics.render(self._events())
+    def calendar_ics(self, *, include_holdings: bool = True) -> str:
+        return ics.render(self._events(include_holdings=include_holdings))
 
     def status(self) -> dict[str, Any]:
         return self.library.status() | self._freshness()

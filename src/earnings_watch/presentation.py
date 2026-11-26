@@ -78,3 +78,14 @@ def group_upcoming(
         else:
             buckets["later"].append(event)
     return buckets
+
+
+def format_utc_slot(
+    hour: int, minute: int, timezone_name: str, *, ref_date: date | None = None
+) -> str:
+    """Format a recurring UTC delivery time (HH:MM UTC) in the user's local timezone."""
+    day = ref_date or datetime.now(timezone.utc).date()
+    utc_dt = datetime(day.year, day.month, day.day, hour, minute, tzinfo=timezone.utc)
+    local_dt = utc_dt.astimezone(ZoneInfo(timezone_name))
+    tz_abbr = local_dt.tzname() or timezone_name
+    return f"{local_dt.strftime('%H:%M')} {tz_abbr}"

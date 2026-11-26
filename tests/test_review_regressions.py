@@ -289,8 +289,13 @@ async def test_unmute_clears_an_all_exchange_mute(seeded):
     sync_holdings(seeded.db, "alice", "broker", [{"ticker": "ALPHA", "exchange": "XNAS"}])
     assert open(seeded, "alice").unwatch("ALPHA")["state"] == "muted"
     assert accounts.mutes(seeded.db, "alice") == {("ALPHA", "")}
+
+    class PortfolioDirectory(Directory):
+        async def resolve(self, subject, **kwargs):
+            return (await super().resolve(subject, **kwargs)) | {"portfolio_admitted": True}
+
     auth = browser(seeded)
-    app = create_app(seeded, auth=auth, directory=Directory())
+    app = create_app(seeded, auth=auth, directory=PortfolioDirectory())
     async with (
         app.earnings_app.router.lifespan_context(app.earnings_app),
         httpx.AsyncClient(
@@ -299,9 +304,9 @@ async def test_unmute_clears_an_all_exchange_mute(seeded):
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        page = (await client.get("/connections/")).text
+        page = (await client.get("/connections/?view=companies")).text
         form = re.search(
-            r'<form method="post" action="/connections/unmute">(.*?)</form>', page, re.S
+            r'<form[^>]*method="post" action="/connections/unmute">(.*?)</form>', page, re.S
         ).group(1)
         assert "Unmute all exchanges" in form
         fields = dict(re.findall(r'name="(\w+)" value="([^"]*)"', form))

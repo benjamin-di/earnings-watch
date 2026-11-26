@@ -24,13 +24,18 @@ def preview_payload(handle):
 
 class Directory:
     admitted = True
+    portfolio_admitted = True
     down = False
 
     async def resolve(self, subject, **kwargs):
         if self.down:
             raise OSError("unreachable")
         return dict(
-            id=subject, admitted=self.admitted, disabled=False, email=subject + "@example.com"
+            id=subject,
+            admitted=self.admitted,
+            disabled=False,
+            portfolio_admitted=self.portfolio_admitted,
+            email=subject + "@example.com",
         )
 
 
@@ -74,11 +79,15 @@ async def test_page_two_people_admission_and_feed_rotation(seeded):
         assert page.status_code == 200, page.text
         assert all(
             label in page.text
-            for label in ("Upcoming", "Your companies", "Notifications", "Calendar")
+            for label in ("Upcoming", "Companies", "Digests &amp; Alerts", "Calendar")
         )
-        assert "alice@example.com" in page.text
-        assert "bob@example.com" not in page.text
-        token = re.search(r"/calendar/([a-f0-9]{64})\.ics", page.text)[1]
+        digests_page = await client.get("/connections/?view=digests")
+        assert digests_page.status_code == 200
+        assert "alice@example.com" in digests_page.text
+        assert "bob@example.com" not in digests_page.text
+        calendar_page = await client.get("/connections/?view=calendar")
+        assert calendar_page.status_code == 200
+        token = re.search(r"/calendar/([a-f0-9]{64})\.ics", calendar_page.text)[1]
         assert (await client.get("/calendar/" + token + ".ics")).status_code == 200
         assert (
             await client.post(

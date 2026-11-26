@@ -149,7 +149,7 @@ async def test_copy_uses_only_the_allowed_connections_script(seeded):
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        response = await client.get("/connections/")
+        response = await client.get("/connections/?view=calendar")
     assert 'data-copy-code="calendar-link"' in response.text
     scripts = re.findall(r"<script>(.*?)</script>", response.text, re.S)
     assert scripts

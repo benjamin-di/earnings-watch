@@ -65,8 +65,16 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--feed", required=True)
     p.add_argument("file", type=Path)
     p = sub.add_parser("notify")
-    p.add_argument("--channel", choices=["stdout", "webhook"], default="stdout")
+    p.add_argument("--channel", choices=["stdout", "webhook", "smtp"], default="stdout")
     p.add_argument("--url")
+    p.add_argument("--all", dest="all_people", action="store_true")
+    p.add_argument("--smtp-host")
+    p.add_argument("--smtp-port", type=int)
+    p.add_argument("--smtp-username")
+    p.add_argument("--smtp-password-file", type=Path)
+    p.add_argument("--smtp-from")
+    p.add_argument("--smtp-tls", choices=["starttls", "ssl"])
+    p.add_argument("--to")
     p.add_argument("--preview", action="store_true")
     p.add_argument("--inspect", action="store_true")
     p.add_argument("--resolve")
@@ -228,7 +236,7 @@ def execute(args, settings):
                 db.execute(
                     "INSERT OR REPLACE INTO metadata VALUES(?,?)", ("blocked:" + args.id, "removed")
                 )
-                for prefix in ("email:", "baseline:", "brief-cutoff:"):
+                for prefix in ("email:", "baseline:", "brief-cutoff:", "weekly-brief-cutoff:"):
                     db.execute("DELETE FROM metadata WHERE key=?", (prefix + args.id,))
                 for namespace in ("holdings:", "delivery-review:"):
                     prefix = namespace + args.id + ":"
@@ -366,9 +374,10 @@ def execute(args, settings):
                     )
         return {"overrides": len(rows)}
     if command == "notify":
-        from .notify import StdoutNotifier, WebhookNotifier, prepare
+        import os
+        from .notify import SmtpNotifier, StdoutNotifier, WebhookNotifier, prepare
         from .outbox import deliver, Notifier
-        from .transport import Transport
+        from .transport import IdentityDirectory, Transport
 
         if args.inspect:
             from .store.database import digest
@@ -408,8 +417,45 @@ def execute(args, settings):
 
             url = public_url(args.url)
             notifier = WebhookNotifier(url, Transport({urlsplit(url).hostname or ""}))
+        elif args.channel == "smtp":
+            directory = (
+                IdentityDirectory(
+                    settings.directory_url, os.environ.get(settings.directory_key_env, "")
+                )
+                if settings.directory_url
+                else None
+            )
+            if settings.directory_required and directory is None:
+                raise EarningsError(
+                    "invalid_argument", "identity directory is required for SMTP notifications"
+                )
+            to_address = (args.to or settings.smtp_to or "").strip()
+            if args.all_people and to_address:
+                raise EarningsError(
+                    "invalid_argument", "--to / smtp_to fallback cannot be used with --all"
+                )
+            notifier = SmtpNotifier(
+                settings.db,
+                host=args.smtp_host or settings.smtp_host,
+                port=args.smtp_port if args.smtp_port is not None else settings.smtp_port,
+                sender=args.smtp_from or settings.smtp_from,
+                username=args.smtp_username or settings.smtp_username,
+                password_file=args.smtp_password_file or settings.smtp_password_file,
+                tls=args.smtp_tls or settings.smtp_tls,
+                to_address=to_address,
+                directory=directory,
+            )
         with maintenance_lock(settings):
             prepare(settings)
+            if args.all_people:
+
+                async def deliver_all():
+                    results = {}
+                    for entry in people(settings.db):
+                        results[entry["id"]] = await deliver(settings.db, entry["id"], notifier)
+                    return {"people": results}
+
+                return asyncio.run(deliver_all())
             return asyncio.run(deliver(settings.db, args.person, notifier))
     service = open_service(settings, args.person)
     if command == "upcoming":

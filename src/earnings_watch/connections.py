@@ -1,28 +1,172 @@
-"""Connections UI and private calendar subscriptions over the native application."""
+"""Connections UI, private calendar subscriptions, and read-only internal targets API."""
 
 from __future__ import annotations
 
-import html
-import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import hmac
+import html
+import json
+import os
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from signin_window.oidc import BrowserAuth, OIDCConfig
 from starlette.applications import Starlette
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.datastructures import UploadFile
-from starlette.routing import Mount, Route, BaseRoute
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.routing import BaseRoute, Mount, Route
 
+from . import interests
 from .composition import open_service
 from .errors import EarningsError
-from . import interests
 from .http_server import AuthenticatedApp
+from .presentation import format_utc_slot, group_upcoming
 from .store import accounts
-from .store.database import Catalogue, LibraryReader, PersonalStore, integrity
+from .store.database import Catalogue, LibraryReader, PersonalStore, integrity, people
 from .transport import IdentityDirectory
 from .ui import page, renderer_options
 
 MAX_BODY = 65536
+_VIEWS = frozenset({"upcoming", "companies", "digests", "calendar"})
+_FILTERS = frozenset({"all", "holdings", "watchlist", "earnings"})
+
+_HUB_STYLE = """
+<style>
+main{max-width:1080px}
+.hub-topbar{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:1.25rem;border-bottom:1px solid var(--line);padding-bottom:.75rem}
+.hub-tabs{display:flex;gap:.4rem;flex-wrap:wrap}
+.hub-tab{display:inline-flex;align-items:center;min-height:40px;padding:.45rem .9rem;border-radius:.6rem;text-decoration:none;color:var(--muted);font-weight:600;border:1px solid transparent}
+.hub-tab:hover{color:var(--text);background:var(--surface)}
+.hub-tab[aria-current="page"]{color:var(--on-accent);background:var(--accent);border-color:var(--accent)}
+.hub-pills{display:flex;gap:.4rem;flex-wrap:wrap;margin:.75rem 0 1rem}
+.hub-pill{display:inline-flex;align-items:center;min-height:34px;padding:.25rem .75rem;border-radius:999px;border:1px solid var(--line);text-decoration:none;color:var(--text);background:var(--surface);font-size:.9rem;font-weight:500}
+.hub-pill[aria-current="true"]{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.hub-section{margin:1.25rem 0}
+.hub-group-title{font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:1.2rem 0 .5rem}
+.hub-events{list-style:none;padding:0;margin:0;display:grid;gap:.65rem}
+.hub-event{background:var(--surface);border:1px solid var(--line);border-radius:.75rem;padding:.9rem 1.1rem;display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap}
+.hub-event-main{flex:1 1 340px;min-width:0}
+.hub-event-meta{display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;margin-top:.3rem;font-size:.9rem;color:var(--muted)}
+.hub-event-links{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;font-size:.9rem}
+.hub-badge{display:inline-flex;align-items:center;padding:.15rem .55rem;border-radius:999px;font-size:.78rem;font-weight:600;background:var(--status-bg);color:var(--text);border:1px solid var(--line)}
+.hub-badge-confirmed{border-color:var(--accent);color:var(--accent)}
+.hub-badge-changed{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.hub-badge-paused{border-style:dashed}
+.hub-badge-off{opacity:.75}
+.hub-toolbar{display:flex;gap:.75rem;flex-wrap:wrap;align-items:flex-end;background:var(--surface);border:1px solid var(--line);border-radius:.85rem;padding:1rem;margin-bottom:1.25rem}
+.hub-toolbar form{display:flex;gap:.65rem;flex-wrap:wrap;align-items:flex-end;margin:0;flex:1 1 480px}
+.hub-field{display:flex;flex-direction:column;gap:.25rem;min-width:160px;flex:1 1 180px}
+.hub-field input,.hub-field select,.hub-field textarea{padding:.5rem .65rem;border:1px solid var(--line);border-radius:.5rem;background:var(--bg);color:var(--text);font:inherit;min-height:42px}
+.hub-table-wrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:.85rem;margin:.75rem 0 1.25rem}
+.hub-table{width:100%;border-collapse:collapse;font-size:.93rem}
+.hub-table th,.hub-table td{padding:.65rem .85rem;text-align:left;border-bottom:1px solid var(--line);vertical-align:middle}
+.hub-table tr:last-child td{border-bottom:none}
+.hub-table th{font-size:.78rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700}
+.hub-inline-form{display:inline-block;margin:0}
+.hub-toggle{min-height:32px;padding:.25rem .65rem;font-size:.82rem;border-radius:999px}
+.hub-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem;align-items:start}
+.hub-card{background:var(--surface);border:1px solid var(--line);border-radius:.9rem;padding:1.25rem}
+.hub-card-head{display:flex;justify-content:space-between;align-items:center;gap:.75rem;margin-bottom:.75rem}
+.hub-card-head h2{margin:0}
+.hub-stack{display:flex;flex-direction:column;gap:.75rem;width:100%}
+.hub-stack form{display:flex;flex-direction:column;gap:.75rem;margin:0;width:100%}
+.hub-check{display:flex;align-items:center;gap:.45rem;cursor:pointer}
+.hub-radios{display:flex;flex-direction:column;gap:.45rem;border:1px solid var(--line);border-radius:.6rem;padding:.75rem;margin:0}
+.hub-radios legend{font-size:.85rem;font-weight:600;color:var(--muted);padding:0 .3rem}
+.hub-code-box{display:flex;gap:.65rem;flex-wrap:wrap;align-items:center;padding:.75rem;border:1px solid var(--line);border-radius:.6rem;background:var(--bg);margin:.75rem 0}
+.hub-code-box code{flex:1 1 280px;font-size:.9rem}
+.hub-actions{display:flex;gap:.65rem;flex-wrap:wrap;align-items:center;margin-top:.75rem}
+[popover]{background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:.9rem;padding:1.4rem;max-width:520px;width:calc(100vw - 2rem);box-shadow:0 16px 40px rgba(0,0,0,.35)}
+[popover]::backdrop{background:rgba(0,0,0,.55)}
+.hub-signout{margin:0}
+.hub-signout button{min-height:36px;padding:.35rem .8rem;font-size:.88rem}
+</style>
+""".strip()
+
+
+def _valid_bearer(headers: dict[str, str], env_names: list[str]) -> bool:
+    auth_header = headers.get("authorization", "")
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+    if len(token) < 32:
+        return False
+    configured = [os.environ.get(name, "") for name in env_names]
+    return any(len(t) >= 32 and hmac.compare_digest(token.encode(), t.encode()) for t in configured)
+
+
+def _build_company_queries(name: str, ticker: str) -> list[str]:
+    queries: list[str] = []
+    for candidate in (name.strip(), ticker.strip()):
+        if candidate and candidate not in queries:
+            queries.append(candidate)
+    return queries
+
+
+async def _targets_payload(settings, directory) -> dict:
+    generated_at = datetime.now(timezone.utc).isoformat()
+    result_people: list[dict] = []
+    for person_row in people(settings.db):
+        subject = person_row["id"]
+        if directory is not None:
+            info = await directory.resolve(subject)
+            if not info["admitted"] or info["disabled"]:
+                continue
+            email = str(info.get("email") or "")
+            portfolio_admitted = bool(info.get("portfolio_admitted") is True)
+        else:
+            email = accounts.remembered_email(settings.db, subject)
+            portfolio_admitted = False
+        prof = accounts.profile(settings.db, subject)
+        prefs = prof["settings"]
+        follows = PersonalStore(settings.db, subject).follows()
+        muted = accounts.mutes(settings.db, subject)
+        news_mutes = set(prefs.get("news_mutes") or [])
+        by_pair: dict[tuple[str, str], dict] = {}
+        for row in follows:
+            is_holding = row["origin"].startswith("holdings:")
+            if is_holding and not portfolio_admitted:
+                continue
+            origin = "holding" if is_holding else "watchlist"
+            ticker = row["ticker"]
+            exchange = row["exchange"]
+            hints = json.loads(row.get("hints") or "{}")
+            name = (row.get("company_name") or hints.get("name") or ticker).strip() or ticker
+            cal_muted = (ticker, exchange) in muted or (ticker, "") in muted
+            news_muted = f"{ticker}:{exchange}" in news_mutes or f"{ticker}:" in news_mutes
+            entry = {
+                "ticker": ticker,
+                "exchange": exchange,
+                "name": name,
+                "queries": _build_company_queries(name, ticker),
+                "origin": origin,
+                "state": row["state"],
+                "calendar": not cal_muted,
+                "news": not news_muted,
+            }
+            pair = (ticker, exchange)
+            existing = by_pair.get(pair)
+            if existing is None or (origin == "holding" and existing["origin"] != "holding"):
+                by_pair[pair] = entry
+        scope = str(prefs.get("news_scope") or "both")
+        if not portfolio_admitted:
+            scope = "watchlist"
+        result_people.append(
+            {
+                "person": subject,
+                "email": email,
+                "timezone": prof["timezone"],
+                "portfolio_admitted": portfolio_admitted,
+                "news_digest": {
+                    "enabled": bool(prefs.get("news_digest", False)),
+                    "cadence": str(prefs.get("news_cadence") or "twice_daily"),
+                    "weekdays_only": bool(prefs.get("news_weekdays_only", False)),
+                    "pause_until": str(prefs.get("news_pause_until") or ""),
+                    "scope": scope,
+                },
+                "companies": list(by_pair.values()),
+            }
+        )
+    return {"schema": 1, "generated_at": generated_at, "people": result_people}
 
 
 def create_app(settings, mode="gateway", *, auth=None, directory=None):
@@ -59,6 +203,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 "id": subject,
                 "admitted": True,
                 "disabled": False,
+                "portfolio_admitted": False,
                 "displayName": who.get("name", ""),
                 "email": who.get("claims", {}).get("email", "")
                 if who.get("claims", {}).get("email_verified") is True
@@ -74,11 +219,536 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             accounts.remember_email(settings.db, subject, info["email"])
         return subject, info
 
-    def form_fields(profile):
-        return '<input type="hidden" name="revision" value="' + str(profile["revision"]) + '">'
+    def _is_portfolio_admitted(info: dict, follows: list[dict]) -> bool:
+        if directory is not None:
+            return bool(info.get("portfolio_admitted") is True)
+        return any(r["origin"].startswith("holdings:") for r in follows)
 
-    def button(label):
-        return '<button type="submit">' + html.escape(label) + "</button>"
+    def form_fields(profile, *, view: str = ""):
+        fields = '<input type="hidden" name="revision" value="' + str(profile["revision"]) + '">'
+        if view in _VIEWS:
+            fields += '<input type="hidden" name="view" value="' + view + '">'
+        return fields
+
+    def button(label: str, *, cls: str = "") -> str:
+        class_attr = f' class="{cls}"' if cls else ""
+        return f'<button type="submit"{class_attr}>{html.escape(label)}</button>'
+
+    def _certainty_badge(event_row: dict) -> str:
+        status = event_row.get("status", "")
+        cls = "hub-badge hub-badge-confirmed" if status == "ir-confirmed" else "hub-badge"
+        return f'<span class="{cls}">{html.escape(str(event_row.get("certainty") or ""))}</span>'
+
+    def _render_event_card(event_row: dict, changed: set[str], *, show_holdings: bool) -> str:
+        doc_links = "".join(
+            '<a href="'
+            + html.escape(d["url"], quote=True)
+            + '" rel="noreferrer">'
+            + html.escape(d.get("title") or d["role"])
+            + "</a>"
+            for d in event_row.get("documents", [])
+        )
+        changed_html = (
+            '<span class="hub-badge hub-badge-changed">Changed</span>'
+            if event_row["id"] in changed
+            else ""
+        )
+        company_name = event_row.get("company_name") or event_row["ticker"]
+        why = [w for w in event_row.get("why_followed", []) if show_holdings or w != "holding"]
+        origin_badges = "".join(
+            f'<span class="hub-badge">{html.escape("Holding" if w == "holding" else "Watchlist")}</span>'
+            for w in why
+        )
+        return (
+            '<li class="hub-event"><div class="hub-event-main">'
+            f"<strong>{html.escape(company_name)}</strong> "
+            f'<span class="muted">{html.escape(event_row["title"])}</span> '
+            f"{changed_html}"
+            '<div class="hub-event-meta">'
+            f"<span>{html.escape(event_row['when'])}</span>"
+            f"{_certainty_badge(event_row)}"
+            f"{origin_badges}"
+            "</div></div>"
+            '<div class="hub-event-links">'
+            f'<a href="{html.escape(event_row["source_url"], quote=True)}" rel="noreferrer">Source</a>'
+            f"{doc_links}"
+            "</div></li>"
+        )
+
+    def _render_tabs(active_view: str) -> str:
+        tabs = [
+            ("upcoming", "Upcoming"),
+            ("companies", "Companies"),
+            ("digests", "Digests & Alerts"),
+            ("calendar", "Calendar"),
+        ]
+        links = "".join(
+            f'<a class="hub-tab" href="/connections/?view={key}"'
+            + (' aria-current="page"' if key == active_view else "")
+            + f">{html.escape(label)}</a>"
+            for key, label in tabs
+        )
+        return (
+            '<div class="hub-topbar">'
+            f'<nav class="hub-tabs" aria-label="Page sections">{links}</nav>'
+            '<form class="hub-signout" method="post" action="/connections/logout">'
+            + button("Sign out", cls="secondary")
+            + "</form></div>"
+        )
+
+    def _render_upcoming_tab(
+        service, profile, changed: set[str], *, show_holdings: bool, filter_by: str
+    ) -> str:
+        try:
+            local_today = datetime.now(ZoneInfo(profile["timezone"])).date()
+        except (ValueError, ZoneInfoNotFoundError):
+            local_today = datetime.now(timezone.utc).date()
+        current = service.upcoming(days=90, include_holdings=show_holdings)
+        recent_data = service.recent(days=14, include_holdings=show_holdings)
+
+        def _visible(ev: dict) -> bool:
+            why = ev.get("why_followed") or []
+            if not show_holdings and why == ["holding"]:
+                return False
+            if filter_by == "holdings":
+                return show_holdings and "holding" in why
+            if filter_by == "watchlist":
+                return "watchlist" in why
+            if filter_by == "earnings":
+                return ev.get("type") == "earnings"
+            return True
+
+        upcoming_events = [e for e in current["events"] if _visible(e)]
+        recent_events = [e for e in recent_data["events"] if _visible(e)]
+        visible_changed = changed & (
+            {e["id"] for e in upcoming_events} | {e["id"] for e in recent_events}
+        )
+        grouped = group_upcoming(upcoming_events, today=local_today)
+
+        parts: list[str] = []
+        note = current.get("coverage_note", "")
+        if note:
+            parts.append('<p role="status">' + html.escape(note) + "</p>")
+
+        pills = [("all", "All")]
+        if show_holdings:
+            pills.append(("holdings", "Holdings"))
+        pills.extend([("watchlist", "Watchlist"), ("earnings", "Earnings")])
+        pill_html = "".join(
+            '<a class="hub-pill" href="/connections/?view=upcoming'
+            + (f"&filter={key}" if key != "all" else "")
+            + '"'
+            + (' aria-current="true"' if key == filter_by else "")
+            + f">{html.escape(label)}</a>"
+            for key, label in pills
+        )
+        header_actions = ""
+        if visible_changed:
+            header_actions = (
+                '<form class="hub-inline-form" method="post" action="/connections/mark-seen">'
+                + form_fields(profile, view="upcoming")
+                + button("Mark changes seen", cls="secondary hub-toggle")
+                + "</form>"
+            )
+        parts.append(
+            f'<div class="hub-pills" role="navigation" aria-label="Filter events">{pill_html}{header_actions}</div>'
+        )
+        parts.append(f'<p class="muted">Next 90 days · {html.escape(profile["timezone"])}</p>')
+
+        group_defs = [
+            ("this_week", "This Week"),
+            ("next_week", "Next Week"),
+            ("later", "Later"),
+        ]
+        any_upcoming = False
+        for bucket_key, bucket_label in group_defs:
+            bucket = grouped[bucket_key]
+            if not bucket:
+                continue
+            any_upcoming = True
+            cards = "".join(
+                _render_event_card(e, visible_changed, show_holdings=show_holdings) for e in bucket
+            )
+            parts.append(
+                f'<section class="hub-section"><h2 class="hub-group-title">{bucket_label} ({len(bucket)})</h2>'
+                f'<ul class="hub-events">{cards}</ul></section>'
+            )
+        if not any_upcoming:
+            parts.append(
+                '<p>No upcoming events match this view. <a href="/connections/?view=companies">Add a company</a> to get started.</p>'
+            )
+
+        if recent_events:
+            recent_cards = "".join(
+                _render_event_card(e, visible_changed, show_holdings=show_holdings)
+                for e in recent_events
+            )
+            parts.append(
+                f'<details class="hub-section"><summary>Recent Releases (14d) · {len(recent_events)}</summary>'
+                f'<ul class="hub-events">{recent_cards}</ul></details>'
+            )
+        else:
+            parts.append(
+                '<details class="hub-section"><summary>Recent Releases (14d) · 0</summary>'
+                "<p>No releases in the last 14 days.</p></details>"
+            )
+        return "".join(parts)
+
+    def _render_companies_tab(
+        service, profile, follows: list[dict], *, show_holdings: bool, news_enabled: bool
+    ) -> str:
+        muted = accounts.mutes(settings.db, profile["person"])
+        news_mutes = set(profile["settings"].get("news_mutes") or [])
+        upcoming_by_source: dict[str, dict] = {}
+        for ev in service.upcoming(days=90, include_holdings=show_holdings)["events"]:
+            upcoming_by_source.setdefault(ev["issuer_key"], ev)
+
+        options = "".join(
+            '<option value="'
+            + html.escape(s.ticker, quote=True)
+            + '">'
+            + html.escape(s.name + " · " + s.ticker + " · " + (s.exchange or ""))
+            + "</option>"
+            for s in LibraryReader(settings.db).sources()
+        )
+        allow_import = directory is None or show_holdings
+        import_button = (
+            '<button type="button" class="secondary" popovertarget="import-csv-popover">Import CSV</button>'
+            if allow_import
+            else ""
+        )
+        import_popover = (
+            '<div id="import-csv-popover" popover>'
+            "<h2>Import companies from CSV</h2>"
+            '<p class="muted">Paste tickers or MIC:TICKER, or upload a CSV with ticker and exchange columns. Quantities and values are discarded. Review changes before replacing uploaded holdings.</p>'
+            '<form class="hub-stack" method="post" action="/connections/import-preview" enctype="multipart/form-data">'
+            + form_fields(profile, view="companies")
+            + '<div class="hub-field"><label for="import-companies">Companies</label>'
+            '<textarea id="import-companies" name="companies" rows="4" maxlength="32768"></textarea></div>'
+            '<div class="hub-field"><label for="import-file">CSV file</label>'
+            '<input id="import-file" name="file" type="file" accept=".csv,text/csv"></div>'
+            '<div class="hub-actions">'
+            + button("Preview import")
+            + '<button type="button" class="secondary" popovertarget="import-csv-popover" popovertargetaction="hide">Cancel</button>'
+            "</div></form></div>"
+            if allow_import
+            else ""
+        )
+        quick_add = (
+            '<div class="hub-toolbar">'
+            '<form method="post" action="/connections/watch">'
+            + form_fields(profile, view="companies")
+            + '<div class="hub-field"><label for="watch-ticker">Company ticker, name, or ISIN</label>'
+            '<input id="watch-ticker" name="ticker" list="companies" required maxlength="100" autocomplete="off" placeholder="e.g. TICKER or 7203.T">'
+            f'<datalist id="companies">{options}</datalist></div>'
+            '<div class="hub-field" style="max-width:160px"><label for="watch-exchange">Exchange (MIC)</label>'
+            '<input id="watch-exchange" name="exchange" maxlength="4" placeholder="Optional"></div>'
+            + button("Add to watchlist")
+            + "</form>"
+            + import_button
+            + "</div>"
+            + import_popover
+        )
+
+        def _toggle_forms(row: dict, *, include_remove: bool) -> tuple[str, str, str]:
+            ticker = row["ticker"]
+            exchange = row["exchange"]
+            exact = (ticker, exchange) in muted
+            every = (ticker, "") in muted
+            is_muted = exact or every
+            target = "" if every and not exact else exchange
+            cal_fields = (
+                form_fields(profile, view="companies")
+                + f'<input type="hidden" name="ticker" value="{html.escape(ticker, quote=True)}">'
+                + f'<input type="hidden" name="exchange" value="{html.escape(target if is_muted else exchange, quote=True)}">'
+            )
+            cal_action = "unmute" if is_muted else "mute"
+            cal_label = (
+                "Unmute all exchanges"
+                if (is_muted and every and not exact)
+                else ("Off" if is_muted else "On")
+            )
+            cal_cls = "secondary hub-toggle" if is_muted else "hub-toggle"
+            cal_html = (
+                f'<form class="hub-inline-form" method="post" action="/connections/{cal_action}">'
+                + cal_fields
+                + button(cal_label, cls=cal_cls)
+                + "</form>"
+            )
+
+            news_html = ""
+            if news_enabled:
+                news_exact = f"{ticker}:{exchange}" in news_mutes
+                news_every = f"{ticker}:" in news_mutes
+                is_news_muted = news_exact or news_every
+                news_target = "" if news_every and not news_exact else exchange
+                news_action = "news-unmute" if is_news_muted else "news-mute"
+                news_label = (
+                    "Unmute all exchanges"
+                    if (is_news_muted and news_every and not news_exact)
+                    else ("Off" if is_news_muted else "On")
+                )
+                news_fields = (
+                    form_fields(profile, view="companies")
+                    + f'<input type="hidden" name="ticker" value="{html.escape(ticker, quote=True)}">'
+                    + f'<input type="hidden" name="exchange" value="{html.escape(news_target if is_news_muted else exchange, quote=True)}">'
+                )
+                news_cls = "secondary hub-toggle" if is_news_muted else "hub-toggle"
+                news_html = (
+                    f'<form class="hub-inline-form" method="post" action="/connections/{news_action}">'
+                    + news_fields
+                    + button(news_label, cls=news_cls)
+                    + "</form>"
+                )
+
+            remove_html = ""
+            if include_remove:
+                rm_fields = (
+                    form_fields(profile, view="companies")
+                    + f'<input type="hidden" name="ticker" value="{html.escape(ticker, quote=True)}">'
+                    + f'<input type="hidden" name="exchange" value="{html.escape(exchange, quote=True)}">'
+                )
+                remove_html = (
+                    '<form class="hub-inline-form" method="post" action="/connections/unwatch">'
+                    + rm_fields
+                    + button("Remove", cls="quiet hub-toggle")
+                    + "</form>"
+                )
+            return cal_html, news_html, remove_html
+
+        def _next_event_cell(source_key: str | None) -> str:
+            ev = upcoming_by_source.get(source_key) if source_key else None
+            if not ev:
+                return '<span class="muted">—</span>'
+            return html.escape(f"{ev['when']} ({ev['period']})")
+
+        sections = [quick_add]
+
+        if show_holdings:
+            holding_rows = [r for r in follows if r["origin"].startswith("holdings:")]
+            news_th = "<th>News</th>" if news_enabled else ""
+            if holding_rows:
+                trs = []
+                for row in holding_rows:
+                    name = row.get("company_name") or row["ticker"]
+                    feed = row["origin"].removeprefix("holdings:")
+                    synced = profile["holdings_sync"].get(feed)
+                    sub = f"Synced {synced[:10]}" if feed != "upload" and synced else "Uploaded"
+                    cal_html, news_html, _ = _toggle_forms(row, include_remove=False)
+                    news_td = f"<td>{news_html}</td>" if news_enabled else ""
+                    mic = (
+                        f' <span class="muted">{html.escape(row["exchange"])}</span>'
+                        if row["exchange"]
+                        else ""
+                    )
+                    trs.append(
+                        "<tr>"
+                        f'<td><strong>{html.escape(name)}</strong><div class="muted">{html.escape(sub)}</div></td>'
+                        f"<td><strong>{html.escape(row['ticker'])}</strong>{mic}</td>"
+                        f"<td>{_next_event_cell(row.get('source_key'))}</td>"
+                        f"<td>{cal_html}</td>"
+                        f"{news_td}"
+                        "</tr>"
+                    )
+                holdings_table = (
+                    '<div class="hub-table-wrap"><table class="hub-table">'
+                    f"<thead><tr><th>Company</th><th>Ticker / MIC</th><th>Next Event</th><th>Calendar</th>{news_th}</tr></thead>"
+                    f"<tbody>{''.join(trs)}</tbody></table></div>"
+                )
+            else:
+                holdings_table = '<p class="muted">No portfolio holdings synced yet.</p>'
+            sections.append(
+                f'<section class="hub-section"><h2>Portfolio Holdings</h2>{holdings_table}</section>'
+            )
+
+        watchlist_rows = [r for r in follows if not r["origin"].startswith("holdings:")]
+        news_th = "<th>News</th>" if news_enabled else ""
+        if watchlist_rows:
+            trs = []
+            for row in watchlist_rows:
+                name = row.get("company_name") or row["ticker"]
+                if row["state"] == "queued":
+                    reason = row.get("reason") or ""
+                    status_html = '<span class="hub-badge">Discovering...</span>' + (
+                        f'<div class="muted">{html.escape(reason)}</div>' if reason else ""
+                    )
+                else:
+                    status_html = '<span class="hub-badge hub-badge-confirmed">Active</span>'
+                cal_html, news_html, remove_html = _toggle_forms(row, include_remove=True)
+                news_td = f"<td>{news_html}</td>" if news_enabled else ""
+                mic = (
+                    f' <span class="muted">{html.escape(row["exchange"])}</span>'
+                    if row["exchange"]
+                    else ""
+                )
+                trs.append(
+                    "<tr>"
+                    f"<td><strong>{html.escape(name)}</strong></td>"
+                    f"<td><strong>{html.escape(row['ticker'])}</strong>{mic}</td>"
+                    f"<td>{status_html}</td>"
+                    f"<td>{_next_event_cell(row.get('source_key'))}</td>"
+                    f"<td>{cal_html}</td>"
+                    f"{news_td}"
+                    f"<td>{remove_html}</td>"
+                    "</tr>"
+                )
+            watchlist_table = (
+                '<div class="hub-table-wrap"><table class="hub-table">'
+                f"<thead><tr><th>Company</th><th>Ticker / MIC</th><th>Status</th><th>Next Event</th><th>Calendar</th>{news_th}<th></th></tr></thead>"
+                f"<tbody>{''.join(trs)}</tbody></table></div>"
+            )
+        else:
+            watchlist_table = '<p class="muted">Your watchlist is empty. Add a ticker above to start tracking.</p>'
+        sections.append(
+            f'<section class="hub-section"><h2>My Watchlist</h2>{watchlist_table}</section>'
+        )
+        return "".join(sections)
+
+    def _render_digests_tab(profile, info: dict, *, show_holdings: bool, news_enabled: bool) -> str:
+        prefs = profile["settings"]
+        tz_name = profile["timezone"]
+        try:
+            local_today = datetime.now(ZoneInfo(tz_name)).date()
+        except (ValueError, ZoneInfoNotFoundError):
+            local_today = datetime.now(timezone.utc).date()
+        email_label = info.get("email") or "No email is available from your identity provider"
+
+        alert_toggles = "".join(
+            '<label class="hub-check"><input type="checkbox" name="'
+            + key
+            + '"'
+            + (" checked" if prefs[key] else "")
+            + "> "
+            + html.escape(label)
+            + "</label>"
+            for key, label in [
+                ("results", "Results out"),
+                ("brief", "Daily brief, only when useful"),
+                ("weekly_brief", "Weekly brief"),
+                ("urgent", "Urgent date changes"),
+            ]
+        )
+        alerts_card = (
+            '<article class="hub-card">'
+            '<div class="hub-card-head"><h2>Earnings Alerts</h2></div>'
+            '<p class="muted">Sent to ' + html.escape(email_label) + " (your sign-in email).</p>"
+            '<div class="hub-stack"><form method="post" action="/connections/preferences">'
+            + form_fields(profile, view="digests")
+            + '<input type="hidden" name="section" value="earnings">'
+            + alert_toggles
+            + '<div class="hub-field"><label for="pref-hour">Brief hour (0–23)</label>'
+            + f'<input id="pref-hour" name="hour" type="number" min="0" max="23" value="{prefs["hour"]}" required></div>'
+            + '<div class="hub-field"><label for="pref-tz">Timezone</label>'
+            + f'<input id="pref-tz" name="timezone" value="{html.escape(tz_name, quote=True)}" required list="timezones">'
+            + '<datalist id="timezones"><option>UTC</option><option>Europe/Berlin</option>'
+            + "<option>Asia/Hong_Kong</option><option>America/New_York</option></datalist></div>"
+            + button("Save preferences")
+            + "</form></div></article>"
+        )
+
+        if not news_enabled:
+            return f'<div class="hub-cards">{alerts_card}</div>'
+
+        pause_until = str(prefs.get("news_pause_until") or "")
+        if not prefs.get("news_digest"):
+            status_badge = '<span class="hub-badge hub-badge-off">Off</span>'
+        elif pause_until and pause_until >= str(local_today):
+            status_badge = f'<span class="hub-badge hub-badge-paused">Paused until {html.escape(pause_until)}</span>'
+        else:
+            status_badge = '<span class="hub-badge hub-badge-confirmed">Active</span>'
+
+        slot_a_local = format_utc_slot(23, 30, tz_name, ref_date=local_today)
+        slot_b_local = format_utc_slot(11, 30, tz_name, ref_date=local_today)
+        cadence_options = [
+            ("twice_daily", f"Twice daily ({slot_a_local} and {slot_b_local})"),
+            ("slot_a", f"Once daily · {slot_a_local} (23:30 UTC)"),
+            ("slot_b", f"Once daily · {slot_b_local} (11:30 UTC)"),
+        ]
+        radios_html = "".join(
+            '<label class="hub-check"><input type="radio" name="news_cadence" value="'
+            + key
+            + '"'
+            + (" checked" if prefs.get("news_cadence") == key else "")
+            + "> "
+            + html.escape(label)
+            + "</label>"
+            for key, label in cadence_options
+        )
+
+        scope_html = ""
+        if show_holdings:
+            current_scope = prefs.get("news_scope", "both")
+            scope_opts = "".join(
+                f'<option value="{val}"'
+                + (" selected" if current_scope == val else "")
+                + f">{html.escape(label)}</option>"
+                for val, label in [
+                    ("both", "Holdings and watchlist"),
+                    ("holdings", "Portfolio holdings only"),
+                    ("watchlist", "Watchlist only"),
+                ]
+            )
+            scope_html = (
+                '<div class="hub-field"><label for="news-scope">Company scope</label>'
+                f'<select id="news-scope" name="news_scope">{scope_opts}</select></div>'
+            )
+
+        news_card = (
+            '<article class="hub-card">'
+            f'<div class="hub-card-head"><h2>Company News Digest</h2>{status_badge}</div>'
+            '<p class="muted">Delivered to '
+            + html.escape(email_label)
+            + " · times shown in "
+            + html.escape(tz_name)
+            + ".</p>"
+            '<div class="hub-stack"><form method="post" action="/connections/preferences">'
+            + form_fields(profile, view="digests")
+            + '<input type="hidden" name="section" value="news">'
+            + '<label class="hub-check"><input type="checkbox" name="news_digest"'
+            + (" checked" if prefs.get("news_digest") else "")
+            + "> Enable Company News Digest</label>"
+            + '<div class="hub-field"><label for="news-pause">Pause until (optional)</label>'
+            + f'<input id="news-pause" type="date" name="news_pause_until" value="{html.escape(pause_until, quote=True)}"></div>'
+            + f'<fieldset class="hub-radios"><legend>Delivery cadence</legend>{radios_html}</fieldset>'
+            + '<label class="hub-check"><input type="checkbox" name="news_weekdays_only"'
+            + (" checked" if prefs.get("news_weekdays_only") else "")
+            + "> Weekdays only</label>"
+            + scope_html
+            + button("Save news digest")
+            + "</form></div></article>"
+        )
+        return f'<div class="hub-cards">{alerts_card}{news_card}</div>'
+
+    def _render_calendar_tab(service, profile) -> str:
+        token = accounts.feed_token(settings.db, profile["person"], service.signing_key)
+        link = settings.public_url.rstrip("/") + "/calendar/" + token + ".ics"
+        outlook = "https://outlook.live.com/calendar/0/addcalendar?url=" + quote(link, safe="")
+        return (
+            '<article class="hub-card">'
+            "<h2>Calendar subscription</h2>"
+            "<p>Subscribe to a read-only calendar of your companies. Calendar apps control refresh timing, which can take hours. Your private link grants access to these events; keep it private.</p>"
+            '<div class="hub-actions">'
+            f'<a class="button" href="{html.escape(outlook, quote=True)}" rel="noreferrer">Add to Outlook</a>'
+            "</div>"
+            '<p class="muted" style="margin-top:1.25rem">Private calendar link</p>'
+            '<div class="hub-code-box">'
+            f'<code id="calendar-link">{html.escape(link, quote=True)}</code>'
+            '<button type="button" class="secondary" data-copy-code="calendar-link">Copy link</button>'
+            "</div>"
+            '<div class="hub-actions">'
+            '<button type="button" class="danger" popovertarget="reset-feed-popover">Reset private link</button>'
+            "</div>"
+            '<div id="reset-feed-popover" popover>'
+            "<h2>Reset private calendar link?</h2>"
+            "<p>Existing calendar subscriptions using the current link will stop updating. You will need to subscribe again with the new link.</p>"
+            '<div class="hub-actions">'
+            '<form method="post" action="/connections/reset-feed">'
+            + form_fields(profile, view="calendar")
+            + button("Reset link", cls="danger")
+            + "</form>"
+            '<button type="button" class="secondary" popovertarget="reset-feed-popover" popovertargetaction="hide">Cancel</button>'
+            "</div></div></article>"
+        )
 
     async def home(request):
         try:
@@ -92,188 +762,40 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             service = open_service(settings, person)
             profile = accounts.profile(settings.db, person)
             page_seq = Catalogue(settings.db).status()["sequence"]
-            current = service.upcoming(days=30)
             seen = profile.get("seen_seq") or 0
             changed = accounts.changed_ids(settings.db, person, seen, page_seq)
-            cards = []
-            for e in current["events"]:
-                links = " ".join(
-                    '<a href="'
-                    + html.escape(d["url"], quote=True)
-                    + '" rel="noreferrer">'
-                    + html.escape(d.get("title") or d["role"])
-                    + "</a>"
-                    for d in e["documents"]
-                )
-                cards.append(
-                    "<li><strong>"
-                    + html.escape(e["title"])
-                    + "</strong> "
-                    + ('<span class="status">Changed</span>' if e["id"] in changed else "")
-                    + "<p>"
-                    + html.escape(e["when"])
-                    + " · "
-                    + html.escape(e["certainty"])
-                    + '</p><a href="'
-                    + html.escape(e["source_url"], quote=True)
-                    + '" rel="noreferrer">Source</a> '
-                    + links
-                    + "</li>"
-                )
-            upcoming = (
-                '<ul class="events">' + "".join(cards) + "</ul>"
-                if cards
-                else "<p>No upcoming events yet. Add a company below to get started.</p>"
-            )
             follows = PersonalStore(settings.db, person).follows()
-            muted = accounts.mutes(settings.db, person)
-            companies = []
-            for row in follows:
-                state = "Holding" if row["origin"].startswith("holdings:") else "Watchlist"
-                feed = row["origin"].removeprefix("holdings:")
-                synced = profile["holdings_sync"].get(feed)
-                if row["origin"].startswith("holdings:") and feed != "upload" and synced:
-                    state = "Holding · Synced from your portfolio, " + synced[:10]
-                if row["state"] == "queued":
-                    state = (
-                        "Adding · " + row["reason"]
-                        if row.get("reason")
-                        else "Adding · usually within minutes"
-                    )
-                exact = (row["ticker"], row["exchange"]) in muted
-                every = (row["ticker"], "") in muted
-                is_muted = exact or every
-                # Unmute targets the mute that matched; an all-exchange mute is
-                # labelled so clearing it for every exchange is explicit.
-                target = "" if every and not exact else row["exchange"]
-                fields = (
-                    form_fields(profile)
-                    + '<input type="hidden" name="ticker" value="'
-                    + html.escape(row["ticker"], quote=True)
-                    + '"><input type="hidden" name="exchange" value="'
-                    + html.escape(target if is_muted else row["exchange"], quote=True)
-                    + '">'
+            show_holdings = _is_portfolio_admitted(info, follows)
+            news_enabled = settings.integrations.news_digest.enabled
+
+            view = request.query_params.get("view", "upcoming")
+            if view not in _VIEWS:
+                view = "upcoming"
+            filter_by = request.query_params.get("filter", "all")
+            if filter_by not in _FILTERS:
+                filter_by = "all"
+
+            if view == "upcoming":
+                tab_body = _render_upcoming_tab(
+                    service, profile, changed, show_holdings=show_holdings, filter_by=filter_by
                 )
-                action = (
-                    "unmute"
-                    if is_muted
-                    else ("mute" if row["origin"].startswith("holdings:") else "unwatch")
+            elif view == "companies":
+                tab_body = _render_companies_tab(
+                    service,
+                    profile,
+                    follows,
+                    show_holdings=show_holdings,
+                    news_enabled=news_enabled,
                 )
-                label_name = (
-                    html.escape(row["company_name"]) + " · " if row.get("company_name") else ""
+            elif view == "digests":
+                tab_body = _render_digests_tab(
+                    profile, info, show_holdings=show_holdings, news_enabled=news_enabled
                 )
-                companies.append(
-                    "<li>"
-                    + label_name
-                    + "<strong>"
-                    + html.escape(row["ticker"])
-                    + "</strong> "
-                    + html.escape(row["exchange"])
-                    + " · "
-                    + html.escape(state)
-                    + (" · Muted" if is_muted else "")
-                    + '<form method="post" action="/connections/'
-                    + action
-                    + '">'
-                    + fields
-                    + button(
-                        ("Unmute all exchanges" if every and not exact else "Unmute")
-                        if is_muted
-                        else ("Mute" if action == "mute" else "Remove")
-                    )
-                    + "</form></li>"
-                )
-            options = "".join(
-                '<option value="'
-                + html.escape(s.ticker, quote=True)
-                + '">'
-                + html.escape(s.name + " · " + s.ticker + " · " + (s.exchange or ""))
-                + "</option>"
-                for s in LibraryReader(settings.db).sources()
-            )
-            add = (
-                '<form method="post" action="/connections/watch">'
-                + form_fields(profile)
-                + '<label>Company ticker or ISIN <input name="ticker" list="companies" required maxlength="100" autocomplete="off"></label><datalist id="companies">'
-                + options
-                + '</datalist><label>Exchange (optional MIC)<input name="exchange" maxlength="4"></label>'
-                + button("Add to watchlist")
-                + "<p>Not listed? Add its ticker to request it. Up to 100 requests can be pending.</p></form>"
-            )
-            upload = (
-                '<details><summary>Import holdings</summary><p>Paste tickers or MIC:TICKER, or upload a CSV with ticker and exchange columns. Quantities and values are discarded. Review changes before replacing uploaded holdings; your synced portfolio and watchlist are kept.</p><form method="post" action="/connections/import-preview" enctype="multipart/form-data">'
-                + form_fields(profile)
-                + '<label>Companies<textarea name="companies" rows="3" maxlength="32768"></textarea></label><label>CSV file<input name="file" type="file" accept=".csv,text/csv"></label>'
-                + button("Preview import")
-                + "</form></details>"
-            )
-            preferences = profile["settings"]
-            toggles = "".join(
-                '<label><input type="checkbox" name="'
-                + k
-                + '"'
-                + (" checked" if preferences[k] else "")
-                + "> "
-                + v
-                + "</label>"
-                for k, v in [
-                    ("results", "Results out"),
-                    ("brief", "Daily brief, only when useful"),
-                    ("urgent", "Urgent date changes"),
-                ]
-            )
-            settings_form = (
-                "<p>Sent to "
-                + html.escape(
-                    info.get("email") or "No email is available from your identity provider"
-                )
-                + ' (your sign-in email). Change this through your identity provider.</p><form method="post" action="/connections/preferences">'
-                + form_fields(profile)
-                + toggles
-                + '<label>Brief hour (0–23)<input name="hour" type="number" min="0" max="23" value="'
-                + str(preferences["hour"])
-                + '" required></label><label>Timezone<input name="timezone" value="'
-                + html.escape(profile["timezone"], quote=True)
-                + '" required list="timezones"></label><datalist id="timezones"><option>UTC</option><option>Europe/Berlin</option><option>Asia/Hong_Kong</option><option>America/New_York</option></datalist>'
-                + button("Save preferences")
-                + "</form>"
-            )
-            token = accounts.feed_token(settings.db, person, service.signing_key)
-            link = settings.public_url.rstrip("/") + "/calendar/" + token + ".ics"
-            outlook = "https://outlook.live.com/calendar/0/addcalendar?url=" + quote(link, safe="")
-            calendar = (
-                '<p>Subscribe to a read-only calendar of your companies. Calendar apps control refresh timing, which can take hours. Your private link grants access to these events; keep it private.</p><a class="button" href="'
-                + html.escape(outlook, quote=True)
-                + '" rel="noreferrer">Add to Outlook</a><p>Private calendar link</p><code id="calendar-link">'
-                + html.escape(link, quote=True)
-                + '</code><button type="button" data-copy-code="calendar-link">Copy link</button><details><summary>Reset private link</summary><p>Existing subscriptions will stop working. Subscribe again with the new link.</p><form method="post" action="/connections/reset-feed">'
-                + form_fields(profile)
-                + button("Reset link")
-                + "</form></details>"
-            )
-            body = '<nav aria-label="Page sections"><a href="#upcoming">Upcoming</a> · <a href="#companies">Your companies</a> · <a href="#notifications">Notifications</a> · <a href="#calendar">Calendar</a></nav>'
-            note = current.get("coverage_note", "")
-            if note:
-                body += '<p role="status">' + html.escape(note) + "</p>"
-            body += (
-                '<section id="upcoming"><h2>Upcoming</h2><p>Next 30 days · '
-                + html.escape(profile["timezone"])
-                + "</p>"
-                + upcoming
-                + '</section><section id="companies"><h2>Your companies</h2><ul>'
-                + "".join(companies)
-                + "</ul>"
-                + add
-                + upload
-                + '</section><section id="notifications"><h2>Notifications</h2>'
-                + settings_form
-                + '</section><section id="calendar"><h2>Calendar</h2>'
-                + calendar
-                + '</section><form method="post" action="/connections/logout">'
-                + button("Sign out")
-                + "</form>"
-            )
-            if request.query_params.get("keep_seen") != "1":
+            else:
+                tab_body = _render_calendar_tab(service, profile)
+
+            body = _HUB_STYLE + _render_tabs(view) + tab_body
+            if request.query_params.get("keep_seen") != "1" and view == "upcoming":
                 accounts.mark_seen(settings.db, person, page_seq)
             return HTMLResponse(
                 page(
@@ -296,7 +818,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
 
     async def change(request):
         try:
-            person, _ = await identity(request)
+            person, info = await identity(request)
             if not person or not auth.origin_ok(request):
                 return Response("Sign in and refresh this page before saving.", 403)
             # Stream first, so chunked bodies cannot bypass the bound.
@@ -306,22 +828,54 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 if len(data) > MAX_BODY:
                     return Response("Import is too large.", 413)
             request._body = bytes(data)
-            form = await request.form(max_files=1, max_fields=10, max_part_size=MAX_BODY)
-            revision = int(str(form.get("revision", "-1")))
-            if revision != accounts.profile(settings.db, person)["revision"]:
-                raise EarningsError("conflict", "This page changed. Refresh before saving.")
+            form = await request.form(max_files=1, max_fields=25, max_part_size=MAX_BODY)
             action = request.path_params["action"]
+            if (
+                action in ("import-preview", "import-apply")
+                and directory is not None
+                and info.get("portfolio_admitted") is not True
+            ):
+                return Response("Holdings import is not available for this account.", 403)
+            if not settings.integrations.news_digest.enabled and (
+                action in ("news-mute", "news-unmute")
+                or (action == "preferences" and str(form.get("section", "")).strip() == "news")
+            ):
+                return Response("Not found.", 404)
+            revision = int(str(form.get("revision", "-1")))
+            current_profile = accounts.profile(settings.db, person)
+            if revision != current_profile["revision"]:
+                raise EarningsError("conflict", "This page changed. Refresh before saving.")
             ticker = str(form.get("ticker", "")).upper().strip()
             exchange = str(form.get("exchange", "")).upper().strip()
+            view = str(form.get("view", "")).strip()
+            redirect_url = (
+                f"/connections/?view={view}&keep_seen=1"
+                if view in _VIEWS and view != "upcoming"
+                else "/connections/?keep_seen=1"
+            )
             if action == "preferences":
-                accounts.preferences(
-                    settings.db,
-                    person,
-                    revision,
-                    {k: form.get(k) == "on" for k in ("results", "brief", "urgent")}
-                    | {"hour": int(str(form.get("hour")))},
-                    str(form.get("timezone")),
-                )
+                section = str(form.get("section", "")).strip()
+                updated = dict(current_profile["settings"])
+                tz = current_profile["timezone"]
+                if section == "news":
+                    follows = PersonalStore(settings.db, person).follows()
+                    show_holdings = _is_portfolio_admitted(info, follows)
+                    updated["news_digest"] = form.get("news_digest") == "on"
+                    updated["news_cadence"] = str(
+                        form.get("news_cadence", updated["news_cadence"])
+                    ).strip()
+                    updated["news_weekdays_only"] = form.get("news_weekdays_only") == "on"
+                    updated["news_pause_until"] = str(form.get("news_pause_until", "")).strip()
+                    if show_holdings and "news_scope" in form:
+                        updated["news_scope"] = str(form.get("news_scope")).strip()
+                    elif not show_holdings:
+                        updated["news_scope"] = "watchlist"
+                else:
+                    for key in ("results", "brief", "weekly_brief", "urgent"):
+                        updated[key] = form.get(key) == "on"
+                    updated["hour"] = int(str(form.get("hour")))
+                    tz = str(form.get("timezone"))
+                accounts.preferences(settings.db, person, revision, updated, tz)
             elif action == "watch":
                 ir_url = str(form.get("ir_url", "")).strip() or None
                 result = PersonalStore(settings.db, person).watch(
@@ -348,6 +902,10 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             elif action in ("mute", "unmute"):
                 accounts.mute(
                     settings.db, person, ticker, exchange, action == "mute", revision=revision
+                )
+            elif action in ("news-mute", "news-unmute"):
+                accounts.news_mute(
+                    settings.db, person, ticker, exchange, action == "news-mute", revision=revision
                 )
             elif action == "reset-feed":
                 accounts.feed_token(
@@ -397,12 +955,12 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     + "</ul>"
                     + unlisted_html
                     + '<form method="post" action="/connections/import-apply">'
-                    + form_fields(accounts.profile(settings.db, person))
+                    + form_fields(accounts.profile(settings.db, person), view="companies")
                     + '<input type="hidden" name="handle" value="'
                     + html.escape(result["handle"], quote=True)
                     + '">'
                     + button("Replace uploaded holdings")
-                    + '</form><a href="/connections/">Cancel</a>'
+                    + '</form><a href="/connections/?view=companies">Cancel</a>'
                 )
                 return HTMLResponse(
                     page("Review holdings import", body), headers={"Cache-Control": "no-store"}
@@ -411,7 +969,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 interests.apply(settings, person, str(form.get("handle", "")))
             else:
                 return Response("Unknown action.", 404)
-            return RedirectResponse("/connections/?keep_seen=1", 303)
+            return RedirectResponse(redirect_url, 303)
         except (EarningsError, ValueError, KeyError) as exc:
             return HTMLResponse(
                 page(
@@ -431,18 +989,41 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 503,
             )
 
+    async def internal_targets(request):
+        if not _valid_bearer(dict(request.headers), settings.targets_tokens_env):
+            return JSONResponse(
+                {"error": "unauthorized"}, status_code=401, headers={"Cache-Control": "no-store"}
+            )
+        if settings.directory_required and directory is None:
+            return JSONResponse(
+                {"error": "identity directory unavailable"},
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        try:
+            payload = await _targets_payload(settings, directory)
+        except Exception:
+            return JSONResponse(
+                {"error": "identity directory unavailable"},
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(payload, status_code=200, headers={"Cache-Control": "no-store"})
+
     async def calendar_feed(request):
         person = accounts.feed_person(settings.db, request.path_params["token"])
         if not person:
             return Response(status_code=404)
         try:
+            include_holdings = True
             if directory:
                 who = await directory.resolve(person)
                 if not who["admitted"] or who["disabled"]:
                     return Response(status_code=404)
+                include_holdings = bool(who.get("portfolio_admitted") is True)
             elif settings.directory_required:
                 return Response(status_code=503)
-            content = open_service(settings, person).calendar_ics()
+            content = open_service(settings, person).calendar_ics(include_holdings=include_holdings)
             return Response(
                 content,
                 media_type="text/calendar",
@@ -470,6 +1051,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
     routes: list[BaseRoute] = [
         Route("/", lambda request: RedirectResponse("/connections/", 303)),
         Route("/health", health),
+        Route("/internal/targets", internal_targets, methods=["GET"]),
         Route("/connections/", home),
         Route("/calendar/{token}.ics", calendar_feed),
     ]
@@ -480,7 +1062,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
     app.state.earnings_auth = auth
     app.state.earnings_native = native
     wrapped = auth.middleware(app) if auth else app
-    # All surfaces, including the bearer calendar URL, share one Host boundary.
+    # All surfaces, including the bearer calendar URL and internal targets API, share one Host boundary.
     from starlette.middleware.trustedhost import TrustedHostMiddleware
 
     outer = TrustedHostMiddleware(wrapped, allowed_hosts=settings.allowed_hosts)

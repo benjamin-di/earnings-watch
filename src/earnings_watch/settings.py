@@ -7,6 +7,16 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+class NewsDigestIntegration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+
+
+class IntegrationsSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    news_digest: NewsDigestIntegration = Field(default_factory=NewsDigestIntegration)
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     data_dir: Path = Field(
@@ -20,6 +30,7 @@ class Settings(BaseModel):
     max_calls_per_run: int = Field(default=20, ge=0, le=200)
     allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "[::1]"])
     backend_tokens_env: list[str] = Field(default_factory=list)
+    targets_tokens_env: list[str] = Field(default_factory=list)
     # Optional OpenAI Responses-compatible endpoint for the Codex backend; the
     # key is read from the named environment variable, never from this file.
     codex_base_url: str = ""
@@ -33,12 +44,28 @@ class Settings(BaseModel):
     directory_required: bool = False
     mail_url: str = ""
     mail_token_env: str = "EARNINGS_MAIL_TOKEN"
+    smtp_host: str = ""
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: str = ""
+    smtp_password_file: Path | None = None
+    smtp_from: str = ""
+    smtp_tls: str = "starttls"
+    smtp_to: str = ""
+    integrations: IntegrationsSettings = Field(default_factory=IntegrationsSettings)
     sec_contact: str = ""
     downloads_root: Path | None = None
     cache_max_mb: int = Field(default=512, ge=1)
     provider_allowlist: list[str] = Field(
         default_factory=lambda: ["generic_ir", "sec_edgar", "hkexnews"]
     )
+
+    @field_validator("smtp_tls")
+    @classmethod
+    def valid_smtp_tls(cls, value: str) -> str:
+        lowered = value.strip().lower()
+        if lowered not in {"starttls", "ssl"}:
+            raise ValueError("smtp_tls must be 'starttls' or 'ssl'")
+        return lowered
 
     @field_validator("provider_allowlist")
     @classmethod
@@ -81,18 +108,36 @@ class Settings(BaseModel):
 def load(path: Path | None = None) -> Settings:
     path = path or Path(os.environ.get("EARNINGS_WATCH_CONFIG", "earnings-watch.toml"))
     raw = tomllib.loads(path.read_text()) if path.is_file() else {}
-    values = dict(raw.get("paths", {}))
+    values: dict = dict(raw.get("paths", {}))
     values.update(raw.get("serve", {}))
     values.update(raw.get("documents", {}))
     values.update(raw.get("llm", {}))
     values.update(raw.get("connections", {}))
     values.update(raw.get("notifications", {}))
+    values.update(raw.get("smtp", {}))
+    if "integrations" in raw:
+        values["integrations"] = raw["integrations"]
     values["sec_contact"] = raw.get("providers", {}).get("sec_edgar", {}).get("contact", "")
     for key in Settings.model_fields:
+        if key == "integrations":
+            continue
         env = os.environ.get("EARNINGS_WATCH_" + key.upper())
         if env is not None:
-            if key in {"backends", "allowed_hosts", "backend_tokens_env", "provider_allowlist"}:
+            if key in {
+                "backends",
+                "allowed_hosts",
+                "backend_tokens_env",
+                "targets_tokens_env",
+                "provider_allowlist",
+            }:
                 values[key] = env.split(",") if env else []
             else:
                 values[key] = env
+    news_env = os.environ.get("EARNINGS_WATCH_INTEGRATIONS_NEWS_DIGEST_ENABLED")
+    if news_env is not None:
+        integrations = dict(values.get("integrations") or {})
+        news_cfg = dict(integrations.get("news_digest") or {})
+        news_cfg["enabled"] = news_env.strip().lower() in {"1", "true", "yes", "on"}
+        integrations["news_digest"] = news_cfg
+        values["integrations"] = integrations
     return Settings.model_validate(values)

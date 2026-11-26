@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+from email.message import EmailMessage
+from email.utils import make_msgid
 import json
+import os
+from pathlib import Path
+import smtplib
+import ssl
+import stat
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from .errors import EarningsError
+from .render import render_email
 from .store.database import people, connect, digest, legacy_blocked
-from .store.accounts import profile, effective_follows
+from .store.accounts import profile, effective_follows, remembered_email
 from .composition import open_service
 from .outbox import enqueue
 
@@ -29,6 +39,111 @@ class WebhookNotifier:
             headers={"Idempotency-Key": key},
         )
         return key
+
+
+def read_private_secret_file(path: Path) -> str:
+    """Read a secret file without following symlinks and requiring 0600 (or stricter) permissions."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise EarningsError(
+            "invalid_argument", "SMTP password file could not be opened safely"
+        ) from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise EarningsError("invalid_argument", "SMTP password file must be a regular file")
+        if st.st_mode & 0o077:
+            raise EarningsError(
+                "invalid_argument", "SMTP password file permissions must be 0600 or stricter"
+            )
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return handle.read().strip()
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+class SmtpNotifier:
+    """TLS-only SMTP delivery channel using pure stdlib rendering."""
+
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        host: str,
+        port: int = 587,
+        sender: str,
+        username: str = "",
+        password_file: Path | None = None,
+        tls: str = "starttls",
+        to_address: str = "",
+        directory=None,
+        smtp_factory=None,
+        timeout: int = 20,
+    ):
+        if not host or not sender:
+            raise EarningsError("invalid_argument", "SMTP requires host and from address")
+        if tls not in {"starttls", "ssl"}:
+            raise EarningsError("invalid_argument", "SMTP tls must be 'starttls' or 'ssl'")
+        self.db_path = db_path
+        self.host = host
+        self.port = port
+        self.sender = sender
+        self.username = username
+        self.password = read_private_secret_file(password_file) if password_file else ""
+        self.tls = tls
+        self.to_address = to_address.strip()
+        self.directory = directory
+        self.smtp_factory = smtp_factory
+        self.timeout = timeout
+
+    async def _recipient(self, person: str) -> str:
+        if self.directory is not None:
+            info = await self.directory.resolve(person)
+            if not info.get("admitted") or info.get("disabled"):
+                return ""
+            return str(info.get("email") or "").strip()
+        return remembered_email(self.db_path, person) or self.to_address
+
+    async def ready(self, person: str, key: str, kind: str, payload: dict) -> bool:
+        return bool(await self._recipient(person))
+
+    def _deliver_sync(self, message: EmailMessage) -> None:
+        context = ssl.create_default_context()
+        if self.smtp_factory is not None:
+            client = self.smtp_factory(self.host, self.port, timeout=self.timeout, context=context)
+        elif self.tls == "ssl":
+            client = smtplib.SMTP_SSL(self.host, self.port, timeout=self.timeout, context=context)
+        else:
+            client = smtplib.SMTP(self.host, self.port, timeout=self.timeout)
+        with client as smtp:
+            if self.tls == "starttls":
+                smtp.ehlo()
+                smtp.starttls(context=context)
+                smtp.ehlo()
+            if self.username:
+                smtp.login(self.username, self.password)
+            smtp.send_message(message)
+
+    async def send(self, person, key, kind, payload):
+        recipient = await self._recipient(person)
+        if not recipient:
+            raise EarningsError("invalid_argument", "recipient email is unavailable")
+        pref = profile(self.db_path, person)
+        rendered = render_email(kind, payload, timezone_name=pref["timezone"])
+        msg = EmailMessage()
+        msg_id = make_msgid(domain="earnings-watch.local")
+        msg["Message-ID"] = msg_id
+        msg["Subject"] = rendered.subject
+        msg["From"] = self.sender
+        msg["To"] = recipient
+        msg.set_content(rendered.text)
+        msg.add_alternative(rendered.html, subtype="html")
+        await asyncio.to_thread(self._deliver_sync, msg)
+        return msg_id
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -82,12 +197,13 @@ def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str
     with connect(settings.db) as db:
         metadata = dict(
             db.execute(
-                "SELECT key,value FROM metadata WHERE key IN (?,?)",
-                ("baseline:" + person, "brief-cutoff:" + person),
+                "SELECT key,value FROM metadata WHERE key IN (?,?,?)",
+                ("baseline:" + person, "brief-cutoff:" + person, "weekly-brief-cutoff:" + person),
             )
         )
         cutoff = metadata.get("baseline:" + person, pref["created_at"])
         brief_cutoff = metadata.get("brief-cutoff:" + person, cutoff)
+        weekly_cutoff = metadata.get("weekly-brief-cutoff:" + person, cutoff)
         cursor = db.execute("SELECT notify_seq FROM people WHERE id=?", (person,)).fetchone()[0]
         deliveries = {
             r["key"]: dict(r)
@@ -99,8 +215,19 @@ def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str
             dict(r) | {"doc": json.loads(r["doc"])}
             for r in db.execute("SELECT * FROM event_revisions WHERE seq>? ORDER BY seq", (cursor,))
         ]
+        weekly_revisions = (
+            [
+                dict(r) | {"doc": json.loads(r["doc"])}
+                for r in db.execute(
+                    "SELECT * FROM event_revisions WHERE at>? ORDER BY seq", (weekly_cutoff,)
+                )
+            ]
+            if pref["settings"]["weekly_brief"]
+            else []
+        )
     cutoff_at = _parse_timestamp(cutoff)
     brief_cutoff_at = _parse_timestamp(brief_cutoff)
+    weekly_cutoff_at = _parse_timestamp(weekly_cutoff)
     recent_docs = [d for d in documents if _parse_timestamp(d["first_seen"]) > cutoff_at]
     pre_cutoff_released = {
         d["event_id"]
@@ -201,6 +328,39 @@ def notices(settings, person: str, at: datetime | None = None) -> list[tuple[str
                     },
                 )
             )
+    if (
+        pref["settings"]["weekly_brief"]
+        and local.hour >= pref["settings"]["hour"]
+        and not any(
+            r["kind"] == "weekly_brief" and r["state"] == "unknown" for r in deliveries.values()
+        )
+    ):
+        iso = today.isocalendar()
+        week_label = f"{iso.year}-W{iso.week:02d}"
+        upcoming_week = [
+            e for e in events if str(today) <= e["date"] <= str(today + timedelta(days=7))
+        ]
+        weekly_docs = [d for d in documents if _parse_timestamp(d["first_seen"]) > weekly_cutoff_at]
+        weekly_changes = [
+            r
+            for r in weekly_revisions
+            if r["doc"].get("issuer_key") in keys and _parse_timestamp(r["at"]) > weekly_cutoff_at
+        ]
+        if upcoming_week or weekly_changes or weekly_docs:
+            result.append(
+                (
+                    "weekly_brief:" + week_label,
+                    "weekly_brief",
+                    {
+                        "day": str(today),
+                        "week": week_label,
+                        "events": upcoming_week,
+                        "changes": weekly_changes[-100:],
+                        "documents": weekly_docs,
+                        "cutoff": at.isoformat(),
+                    },
+                )
+            )
     return [
         entry
         for entry in result
@@ -214,11 +374,11 @@ def prepare(settings) -> None:
         if legacy_blocked(settings.db, identifier):
             continue
         for key, kind, payload in notices(settings, identifier):
-            if kind == "brief":
+            if kind in {"brief", "weekly_brief"}:
                 with connect(settings.db, write=True) as db:
                     db.execute(
-                        "UPDATE deliveries SET state='superseded' WHERE person=? AND kind='brief' AND state='pending' AND key!=?",
-                        (identifier, key),
+                        "UPDATE deliveries SET state='superseded' WHERE person=? AND kind=? AND state='pending' AND key!=?",
+                        (identifier, kind, key),
                     )
             enqueue(settings.db, identifier, key, kind, payload)
 

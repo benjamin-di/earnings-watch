@@ -7,14 +7,74 @@ import hmac
 import json
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..errors import EarningsError
+from ..symbols import is_valid_exchange, is_valid_ticker
 from .database import connect, encode, now, check_revision
 
-DEFAULTS = {"results": True, "brief": False, "urgent": False, "hour": 8}
+DEFAULTS: dict[str, Any] = {
+    "results": True,
+    "brief": False,
+    "weekly_brief": False,
+    "urgent": False,
+    "hour": 8,
+    "news_digest": False,
+    "news_cadence": "twice_daily",
+    "news_weekdays_only": False,
+    "news_pause_until": "",
+    "news_scope": "both",
+    "news_mutes": [],
+}
+
+_NEWS_CADENCES = frozenset({"twice_daily", "slot_a", "slot_b"})
+_NEWS_SCOPES = frozenset({"both", "holdings", "watchlist"})
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+MAX_NEWS_MUTES = 200
+
+
+def _validate_news_mute_entry(item: Any) -> str:
+    if type(item) is not str or ":" not in item:
+        raise EarningsError("invalid_argument", "invalid news mute entry")
+    ticker, exchange = item.split(":", 1)
+    if not is_valid_ticker(ticker) or (exchange != "" and not is_valid_exchange(exchange)):
+        raise EarningsError("invalid_argument", "invalid news mute entry")
+    return f"{ticker}:{exchange}"
+
+
+def _validate_preferences(values: dict[str, Any]) -> dict[str, Any]:
+    if not set(values) <= set(DEFAULTS) or not {"results", "brief", "urgent", "hour"} <= set(
+        values
+    ):
+        raise EarningsError("invalid_argument", "invalid notification preferences")
+    merged = {**DEFAULTS, **values}
+    for key in ("results", "brief", "weekly_brief", "urgent", "news_digest", "news_weekdays_only"):
+        if type(merged[key]) is not bool:
+            raise EarningsError("invalid_argument", "invalid notification preferences")
+    if type(merged["hour"]) is not int or not 0 <= merged["hour"] <= 23:
+        raise EarningsError("invalid_argument", "invalid notification preferences")
+    if merged["news_cadence"] not in _NEWS_CADENCES:
+        raise EarningsError("invalid_argument", "invalid news digest cadence")
+    if merged["news_scope"] not in _NEWS_SCOPES:
+        raise EarningsError("invalid_argument", "invalid news digest scope")
+    pause_until = merged["news_pause_until"]
+    if type(pause_until) is not str:
+        raise EarningsError("invalid_argument", "invalid news digest pause date")
+    if pause_until != "":
+        if not _ISO_DATE_RE.fullmatch(pause_until):
+            raise EarningsError("invalid_argument", "invalid news digest pause date")
+        try:
+            date.fromisoformat(pause_until)
+        except ValueError:
+            raise EarningsError("invalid_argument", "invalid news digest pause date") from None
+    raw_mutes = merged["news_mutes"]
+    if type(raw_mutes) is not list or len(raw_mutes) > MAX_NEWS_MUTES:
+        raise EarningsError("invalid_argument", "invalid news mutes")
+    cleaned_mutes = sorted({_validate_news_mute_entry(item) for item in raw_mutes})
+    return merged | {"news_mutes": cleaned_mutes}
 
 
 def provision(path: Path, subject: str, label: str = "") -> str:
@@ -43,7 +103,9 @@ def profile(path: Path, person: str) -> dict:
         if row is None:
             raise EarningsError("unauthorized", "unknown person")
         data = dict(row)
-        data["settings"] = DEFAULTS | json.loads(data.get("settings") or "{}")
+        merged = {**DEFAULTS, **json.loads(data.get("settings") or "{}")}
+        merged["news_mutes"] = list(merged.get("news_mutes") or [])
+        data["settings"] = merged
         data["revision"] = data.get("revision") or 0
         prefix = "holdings:" + person + ":"
         data["holdings_sync"] = {
@@ -63,17 +125,11 @@ def preferences(path: Path, person: str, revision: int, values: dict, tz: str) -
         raise EarningsError(
             "invalid_argument", "Choose a time zone such as Europe/Berlin."
         ) from None
-    if (
-        set(values) != set(DEFAULTS)
-        or any(type(values[k]) is not bool for k in ("results", "brief", "urgent"))
-        or type(values["hour"]) is not int
-        or not 0 <= values["hour"] <= 23
-    ):
-        raise EarningsError("invalid_argument", "invalid notification preferences")
+    cleaned = _validate_preferences(values)
     with connect(path, write=True) as db:
         changed = db.execute(
             "UPDATE profiles SET settings=?,revision=revision+1 WHERE person=? AND revision=?",
-            (encode(values), person, revision),
+            (encode(cleaned), person, revision),
         )
         if not changed.rowcount:
             raise EarningsError("conflict", "This page changed. Refresh before saving again.")
@@ -354,3 +410,43 @@ def remember_email(path: Path, person: str, email: str) -> None:
         return
     with connect(path, write=True) as db:
         db.execute("INSERT OR REPLACE INTO metadata VALUES(?,?)", ("email:" + person, email))
+
+
+def remembered_email(path: Path, person: str) -> str:
+    with connect(path) as db:
+        row = db.execute("SELECT value FROM metadata WHERE key=?", ("email:" + person,)).fetchone()
+        return str(row[0]) if row else ""
+
+
+def news_mute(
+    path: Path,
+    person: str,
+    ticker: str,
+    exchange: str,
+    enabled: bool,
+    *,
+    revision: int | None = None,
+) -> dict[str, Any]:
+    norm_ticker = ticker.strip().upper()
+    norm_exchange = exchange.strip().upper()
+    entry = _validate_news_mute_entry(f"{norm_ticker}:{norm_exchange}")
+    with connect(path, write=True) as db:
+        check_revision(db, person, revision)
+        row = db.execute("SELECT settings FROM profiles WHERE person=?", (person,)).fetchone()
+        if row is None:
+            raise EarningsError("unauthorized", "unknown person")
+        merged = {**DEFAULTS, **json.loads(row[0] or "{}")}
+        current_mutes = set(merged.get("news_mutes") or [])
+        if enabled:
+            if entry not in current_mutes and len(current_mutes) >= MAX_NEWS_MUTES:
+                raise EarningsError("over_cap", "News mute limit reached.")
+            current_mutes.add(entry)
+        else:
+            current_mutes.discard(entry)
+        merged["news_mutes"] = sorted(current_mutes)
+        cleaned = _validate_preferences(merged)
+        db.execute(
+            "UPDATE profiles SET settings=?,revision=revision+1 WHERE person=?",
+            (encode(cleaned), person),
+        )
+    return profile(path, person)

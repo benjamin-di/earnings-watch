@@ -416,7 +416,7 @@ async def test_connections_escapes_registration_reason_and_paused_register(seede
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        resp = await client.get("/connections/")
+        resp = await client.get("/connections/?view=companies")
         assert resp.status_code == 200
         assert '<script>alert("xss")</script>' not in resp.text
         assert "&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;" in resp.text

@@ -267,7 +267,13 @@ class IdentityDirectory:
                 headers={"X-API-Key": self.key},
             ) as response:
                 if response.status_code == 404:
-                    return {"id": subject, "admitted": False, "disabled": True, "email": ""}
+                    return {
+                        "id": subject,
+                        "admitted": False,
+                        "disabled": True,
+                        "email": "",
+                        "portfolio_admitted": False,
+                    }
                 response.raise_for_status()
                 data = bytearray()
                 async for chunk in response.aiter_bytes():
@@ -284,6 +290,7 @@ class IdentityDirectory:
             or not isinstance(body.get("email"), str)
         ):
             raise ValueError("directory response is invalid")
+        body["portfolio_admitted"] = body.get("portfolio_admitted") is True
         if len(self.cache) >= 1024:
             self.cache.clear()
         self.cache[subject] = (time.monotonic() + 60, dict(body))

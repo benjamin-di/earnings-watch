@@ -18,6 +18,7 @@ KINDS = frozenset(
         "calendar_attention",
         "results",
         "brief",
+        "weekly_brief",
         "urgent",
     }
 )
@@ -37,7 +38,7 @@ def enqueue(path, person: str, key: str, kind: str, payload: dict[str, Any]) -> 
             "INSERT OR IGNORE INTO deliveries(person,key,kind,state,payload) VALUES(?,?,?,?,?)",
             (person, key, kind, "pending", encode(payload)),
         )
-        if kind in {"results", "brief", "urgent"}:
+        if kind in {"results", "brief", "weekly_brief", "urgent"}:
             db.execute(
                 "UPDATE deliveries SET payload=? WHERE person=? AND key=? AND state='pending'",
                 (encode(payload), person, key),
@@ -133,6 +134,12 @@ async def _deliver(path, person: str, notifier: Notifier) -> dict:
                     "INSERT OR REPLACE INTO metadata VALUES(?,?)",
                     ("brief-cutoff:" + person, body["cutoff"]),
                 )
+            elif row["kind"] == "weekly_brief":
+                body = json.loads(row["payload"])
+                db.execute(
+                    "INSERT OR REPLACE INTO metadata VALUES(?,?)",
+                    ("weekly-brief-cutoff:" + person, body["cutoff"]),
+                )
         sent.append(row["key"])
     return {"sent": sent, "unknown": unknown}
 
@@ -193,6 +200,11 @@ def _reconcile(path, person: str, key: str, receipt: dict) -> dict:
                     "INSERT OR REPLACE INTO metadata VALUES(?,?)",
                     ("brief-cutoff:" + person, body["cutoff"]),
                 )
+            elif key.startswith("weekly_brief:"):
+                db.execute(
+                    "INSERT OR REPLACE INTO metadata VALUES(?,?)",
+                    ("weekly-brief-cutoff:" + person, body["cutoff"]),
+                )
         else:
             db.execute(
                 "UPDATE deliveries SET state='pending' WHERE person=? AND key=?", (person, key)
@@ -210,7 +222,7 @@ def _reconcile(path, person: str, key: str, receipt: dict) -> dict:
 def _eligible(db, person, row):
     import json
 
-    if row["kind"] in {"results", "brief", "urgent"}:
+    if row["kind"] in {"results", "brief", "weekly_brief", "urgent"}:
         pref = json.loads(
             db.execute("SELECT settings FROM profiles WHERE person=?", (person,)).fetchone()[0]
         )
@@ -222,7 +234,7 @@ def _eligible(db, person, row):
             )
         }
         payload = json.loads(row["payload"])
-        if row["kind"] == "brief":
+        if row["kind"] in {"brief", "weekly_brief"}:
             payload["events"] = [e for e in payload.get("events", []) if e["issuer_key"] in keys]
             payload["changes"] = [
                 c for c in payload.get("changes", []) if c["doc"]["issuer_key"] in keys
