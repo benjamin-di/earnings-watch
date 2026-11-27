@@ -333,7 +333,11 @@ def execute(args, settings):
             from .connections import create_app
 
             uvicorn.run(
-                create_app(settings, args.mode), host=args.host, port=args.port, access_log=False
+                create_app(settings, args.mode),
+                host=args.host,
+                port=args.port,
+                access_log=False,
+                timeout_keep_alive=65,
             )
         else:
             from .mcp_server import create, person_context
