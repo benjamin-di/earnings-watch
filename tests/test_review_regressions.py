@@ -304,7 +304,7 @@ async def test_unmute_clears_an_all_exchange_mute(seeded):
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        page = (await client.get("/connections/?view=companies")).text
+        page = (await client.get("/?view=companies")).text
         form = re.search(
             r'<form[^>]*method="post" action="/connections/unmute">(.*?)</form>', page, re.S
         ).group(1)

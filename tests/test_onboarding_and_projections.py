@@ -342,7 +342,7 @@ async def test_changed_badge_survives_post_redirect_until_marked_seen(seeded):
             follow_redirects=False,
         )
         assert r.status_code == 303
-        assert r.headers["location"] == "/connections/?keep_seen=1"
+        assert r.headers["location"] == "/?keep_seen=1"
         page_after = await client.get(r.headers["location"])
         assert "Changed" in page_after.text
         assert accounts.profile(seeded.db, "alice")["seen_seq"] == 0
@@ -467,7 +467,7 @@ async def test_connections_escapes_registration_reason_and_paused_register(seede
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        resp = await client.get("/connections/?view=companies")
+        resp = await client.get("/?view=companies")
         assert resp.status_code == 200
         assert '<script>alert("xss")</script>' not in resp.text
         assert "&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;" in resp.text

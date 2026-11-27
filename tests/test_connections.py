@@ -48,7 +48,8 @@ def browser(settings):
             public_url="http://localhost",
             state_dir=settings.data_dir / "browser",
             allow_loopback_http=True,
-        )
+        ),
+        home="/",
     )
     auth.store.save(
         "a" * 43,
@@ -75,17 +76,26 @@ async def test_page_two_people_admission_and_feed_rotation(seeded):
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        page = await client.get("/connections/")
+        page = await client.get("/")
         assert page.status_code == 200, page.text
+        for legacy, expected in (
+            ("/connections", "/"),
+            ("/connections/", "/"),
+            ("/connections/?view=companies", "/?view=companies"),
+        ):
+            redir = await client.get(legacy, follow_redirects=False)
+            assert redir.status_code == 308
+            assert redir.headers["location"] == expected
+            assert redir.headers["cache-control"] == "no-store"
         assert all(
             label in page.text
             for label in ("Upcoming", "Companies", "Digests &amp; alerts", "Calendar")
         )
-        digests_page = await client.get("/connections/?view=digests")
+        digests_page = await client.get("/?view=digests")
         assert digests_page.status_code == 200
         assert "alice@example.com" in digests_page.text
         assert "bob@example.com" not in digests_page.text
-        calendar_page = await client.get("/connections/?view=calendar")
+        calendar_page = await client.get("/?view=calendar")
         assert calendar_page.status_code == 200
         token = re.search(r"/calendar/([a-f0-9]{64})\.ics", calendar_page.text)[1]
         assert (await client.get("/calendar/" + token + ".ics")).status_code == 200
@@ -120,7 +130,7 @@ async def test_page_two_people_admission_and_feed_rotation(seeded):
         ).status_code == 303
         assert (await client.get("/calendar/" + token + ".ics")).status_code == 404
         directory.admitted = False
-        assert (await client.get("/connections/")).status_code == 403
+        assert (await client.get("/")).status_code == 403
         new = accounts.feed_token(
             seeded.db, "alice", (seeded.data_dir / "calendar.key").read_bytes()
         )
@@ -139,7 +149,7 @@ async def test_chunked_import_limit_and_spoofed_browser_identity(seeded):
         ) as client,
     ):
         assert (
-            await client.get("/connections/", headers={"X-Fleet-Subject": "alice"})
+            await client.get("/", headers={"X-Fleet-Subject": "alice"})
         ).status_code == 303
         client.cookies.set(auth.cookie, "a" * 43)
 
@@ -515,14 +525,14 @@ async def test_hub_ui_deduplication_mark_seen_json_revisions_and_static_assets(s
 
         # 2. Upcoming GET renders clean summary without duplicating ticker, keeps single no-referrer,
         # and does NOT auto-wipe Changed badge on reload.
-        first = await client.get("/connections/?view=upcoming")
+        first = await client.get("/?view=upcoming")
         assert first.status_code == 200
         assert first.headers.get_list("referrer-policy") == ["no-referrer"]
         assert first.headers.get_list("cache-control") == ["no-store"]
         assert '<span class="event-summary">2027 Dividend</span>' in first.text
         assert "2027-dividend dividend" not in first.text
         assert 'data-badge="changed"' in first.text
-        second = await client.get("/connections/?view=upcoming")
+        second = await client.get("/?view=upcoming")
         assert 'data-badge="changed"' in second.text
 
         # Explicit POST /connections/mark-seen clears Changed badge via JSON.
@@ -534,12 +544,12 @@ async def test_hub_ui_deduplication_mark_seen_json_revisions_and_static_assets(s
         )
         assert seen_resp.status_code == 200
         assert seen_resp.json()["ok"] is True
-        third = await client.get("/connections/?view=upcoming")
+        third = await client.get("/?view=upcoming")
         assert 'data-badge="changed"' not in third.text
 
         # 3. Companies tab merges overlapping Holding + Watchlist into a single company-row
         # with formatted next-event summary (not raw slug).
-        companies = await client.get("/connections/?view=companies")
+        companies = await client.get("/?view=companies")
         assert companies.status_code == 200
         assert companies.text.count('class="company-row"') == 1
         assert "· 2027 Dividend</p>" in companies.text
@@ -612,7 +622,7 @@ async def test_hub_ui_deduplication_mark_seen_json_revisions_and_static_assets(s
         assert "Refresh" in stale.json()["error"]
 
         # 5. Digests tab renders 00:00-23:00 hour select and saves both sections in one POST.
-        digests = await client.get("/connections/?view=digests")
+        digests = await client.get("/?view=digests")
         assert '<select id="pref-hour" name="hour" required>' in digests.text
         assert '<option value="8" selected>08:00</option>' in digests.text
         save_resp = await client.post(

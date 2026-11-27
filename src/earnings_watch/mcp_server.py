@@ -268,7 +268,7 @@ def create(settings: Settings) -> FastMCP:
     def earnings_status() -> dict[str, Any]:
         """Read catalogue counts, maintenance status, and connections URL without model calls."""
         return service().status() | {
-            "settings_url": settings.public_url.rstrip("/") + "/connections/"
+            "settings_url": settings.public_url.rstrip("/") + "/"
             if settings.public_url
             else None
         }

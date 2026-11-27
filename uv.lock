@@ -456,7 +456,7 @@ wheels = [
 
 [[package]]
 name = "earnings-watch"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
@@ -490,7 +490,7 @@ requires-dist = [
     { name = "pypdf", specifier = ">=5,<7" },
     { name = "python-multipart", specifier = ">=0.0.20,<1" },
     { name = "pyyaml", specifier = ">=6,<7" },
-    { name = "signin-window", extras = ["oidc"], specifier = ">=0.14.0,<0.15" },
+    { name = "signin-window", extras = ["oidc"], specifier = ">=0.15.0,<0.16" },
     { name = "tzdata", specifier = ">=2024.1" },
 ]
 
@@ -1669,16 +1669,16 @@ wheels = [
 
 [[package]]
 name = "signin-window"
-version = "0.14.0"
+version = "0.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "starlette" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ae/23/f06fe8eab34dc5b4ba924f0b201efe5f84bd8a5d15737a95282c31c36c32/signin_window-0.14.0.tar.gz", hash = "sha256:c56e64c3072e1f1e36d6c463ccc2b76fd702054019be85e9f6e8b70ad0723f02", size = 391510, upload-time = "2026-11-27T06:03:17.977Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/a2/baf01f0349ea8f45ed65be6ce4fafe214316e7c2b32673d79c9350bf6b56/signin_window-0.15.0.tar.gz", hash = "sha256:036a1c59872fd5f045064fdf5e4ac2684d22cf0df8f92d3eff8148fb84f6577b", size = 392259, upload-time = "2026-11-27T07:33:33.089Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0d/86/244865d49ab84ffff4b4a3dd609703f8ed6b956c141c76189d7d5672e3ec/signin_window-0.14.0-py3-none-any.whl", hash = "sha256:b2ca5866074fccee1dfa5a17e203f81aed0349eb8c2f69f915e238081ccd3194", size = 183642, upload-time = "2026-11-27T06:03:16.845Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/f8/9c0ba2e614297df5eb9fd9b55d16f472272ea8ff5e88e0a0b1b37fa8b58e/signin_window-0.15.0-py3-none-any.whl", hash = "sha256:90697744d62d18f3d2ecd05f3225ba8ef99d665dfb56f7c1694fdb730f0ee057", size = 183759, upload-time = "2026-11-27T07:33:31.949Z" },
 ]
 
 [package.optional-dependencies]

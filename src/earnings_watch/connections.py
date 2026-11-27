@@ -396,6 +396,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 cookie_name="__Host-earnings",
                 claim_names=("person_id", "email", "email_verified"),
             ),
+            home="/",
             **renderer_options(BrowserAuth),
         )
     native = AuthenticatedApp(settings, mode, directory=directory)
@@ -546,7 +547,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             pills.append(("holdings", "Holdings"))
         pills.extend([("watchlist", "Watchlist"), ("earnings", "Earnings")])
         pill_html = "".join(
-            '<a class="filter-pill" href="/connections/?view=upcoming'
+            '<a class="filter-pill" href="/?view=upcoming'
             + (f"&filter={key}" if key != "all" else "")
             + '"'
             + (' aria-current="true"' if key == filter_by else "")
@@ -566,7 +567,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         )
         parts.append(
             f'<p class="muted small">Next 90 days · {html.escape(profile["timezone"])} · '
-            '<a href="/connections/?view=digests">Change timezone</a></p>'
+            '<a href="/?view=digests">Change timezone</a></p>'
         )
 
         group_defs = [
@@ -590,7 +591,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         if not any_upcoming:
             parts.append(
                 '<section class="empty"><p>No upcoming events match this view.</p>'
-                '<p><a class="button primary" href="/connections/?view=companies">Add a company</a></p></section>'
+                '<p><a class="button primary" href="/?view=companies">Add a company</a></p></section>'
             )
 
         if recent_events:
@@ -1027,7 +1028,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             + '<div class="form-error" role="alert"></div>'
             + '<div class="actions-row">'
             + button("Save preferences", cls="button primary")
-            + '<a class="button secondary" href="/connections/?view=preview">Preview next brief</a>'
+            + '<a class="button secondary" href="/?view=preview">Preview next brief</a>'
             + "</div></form>"
             + history_html
         )
@@ -1075,7 +1076,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
 
         return (
             '<div class="actions-row preview-back">'
-            '<a class="button secondary" href="/connections/?view=digests">← Back to digests</a>'
+            '<a class="button secondary" href="/?view=digests">← Back to digests</a>'
             "</div>" + "".join(cards)
         )
 
@@ -1281,9 +1282,9 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             exchange = str(form.get("exchange", "")).upper().strip()
             view = str(form.get("view", "")).strip()
             redirect_url = (
-                f"/connections/?view={view}&keep_seen=1"
+                f"/?view={view}&keep_seen=1"
                 if view in _VIEWS and view != "upcoming"
-                else "/connections/?keep_seen=1"
+                else "/?keep_seen=1"
             )
             json_extra: dict = {}
             if action == "preferences":
@@ -1339,7 +1340,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                         {"ok": True, "revision": latest_rev, "message": "Changes marked as seen."},
                         headers={"Cache-Control": "no-store"},
                     )
-                return RedirectResponse("/connections/", 303)
+                return RedirectResponse("/", 303)
             elif action == "unwatch":
                 PersonalStore(settings.db, person).unwatch(
                     ticker,
@@ -1466,7 +1467,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     + html.escape(result["handle"], quote=True)
                     + '">'
                     + button("Replace uploaded holdings", cls="button primary")
-                    + '</form><a class="button secondary" href="/connections/?view=companies">Cancel</a></div></article>'
+                    + '</form><a class="button secondary" href="/?view=companies">Cancel</a></div></article>'
                 )
                 account_label = info.get("displayName") or info.get("email") or ""
                 return _hub_html(
@@ -1520,9 +1521,9 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 except Exception:
                     back_view = ""
             back_href = (
-                f"/connections/?view={back_view}"
+                f"/?view={back_view}"
                 if back_view in _VIEWS and back_view != "upcoming"
-                else "/connections/"
+                else "/"
             )
             return _hub_html(
                 hub_page(
@@ -1650,13 +1651,18 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         async with native.app.router.lifespan_context(native.app):
             yield
 
+    async def legacy_connections_redirect(request):
+        target = f"/?{request.url.query}" if request.url.query else "/"
+        return RedirectResponse(target, status_code=308, headers={"Cache-Control": "no-store"})
+
     routes: list[BaseRoute] = [
-        Route("/", lambda request: RedirectResponse("/connections/", 303)),
+        Route("/", home),
         Route("/health", health),
         Route("/internal/targets", internal_targets, methods=["GET"]),
         Route("/internal/library-targets", internal_library_targets, methods=["GET"]),
         Route("/connections/assets/{filename}", static_asset, methods=["GET"]),
-        Route("/connections/", home),
+        Route("/connections", legacy_connections_redirect, methods=["GET"]),
+        Route("/connections/", legacy_connections_redirect, methods=["GET"]),
         Route("/calendar/{token}.ics", calendar_feed),
     ]
     if auth:
@@ -1676,7 +1682,9 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         is_asset = path.startswith("/connections/assets/")
 
         async def send_clean(message):
-            if message["type"] == "http.response.start" and path.startswith("/connections/"):
+            if message["type"] == "http.response.start" and (
+                path == "/" or path.startswith("/connections/")
+            ):
                 seen: set[bytes] = set()
                 cleaned: list[tuple[bytes, bytes]] = []
                 for key, val in message.get("headers", []):

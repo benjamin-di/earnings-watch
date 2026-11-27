@@ -816,7 +816,7 @@ async def test_p2_7_connections_hub_renders_coverage_warnings_and_month_precisio
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        resp = await client.get("/connections/")
+        resp = await client.get("/")
         assert resp.status_code == 200
         assert "coverage-warnings" in resp.text
         assert "EMPTY: no tracked events" in resp.text

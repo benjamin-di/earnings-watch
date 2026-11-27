@@ -103,7 +103,7 @@ async def test_suite_switcher_present_filtered_and_endpoint_opt_in(seeded):
         ) as client,
     ):
         for view in ("upcoming", "companies", "digests", "preview", "calendar"):
-            resp = await client.get(f"/connections/?view={view}")
+            resp = await client.get(f"/?view={view}")
             assert resp.status_code == 200
             html_body = resp.text
             assert 'class="suite-bar"' in html_body
@@ -137,7 +137,7 @@ async def test_suite_switcher_present_filtered_and_endpoint_opt_in(seeded):
             cookies={auth_ep.cookie: "b" * 43},
         ) as client,
     ):
-        resp = await client.get("/connections/?view=upcoming")
+        resp = await client.get("/?view=upcoming")
         assert resp.status_code == 200
         assert 'id="connection-suite-endpoint"' in resp.text
         assert "https://mcp.example.com/mcp" in resp.text
@@ -159,7 +159,7 @@ async def test_suite_switcher_absent_when_unset_or_single_app(seeded, monkeypatc
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        resp = await client.get("/connections/")
+        resp = await client.get("/")
         assert resp.status_code == 200
         assert 'class="suite-bar"' in resp.text
         assert 'class="suite-switch"' not in resp.text
@@ -177,7 +177,7 @@ async def test_suite_switcher_absent_when_unset_or_single_app(seeded, monkeypatc
             cookies={auth_only.cookie: "c" * 43},
         ) as client,
     ):
-        resp = await client.get("/connections/")
+        resp = await client.get("/")
         assert resp.status_code == 200
         assert 'class="suite-switch"' not in resp.text
 
@@ -233,7 +233,7 @@ async def test_no_suite_switcher_on_signed_out_refused_or_error_pages(seeded, mo
             cookies={auth_403.cookie: "d" * 43},
         ) as client,
     ):
-        denied = await client.get("/connections/")
+        denied = await client.get("/")
         assert denied.status_code == 403
         assert 'class="suite-switch"' not in denied.text
         assert "connection-suite-endpoint" not in denied.text

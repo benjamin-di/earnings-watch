@@ -251,10 +251,10 @@ async def test_every_owned_html_outcome_keeps_status_and_one_footer(
         ) as client,
     ):
         if outcome in {"home", "denied", "home_failure"}:
-            response = await client.get("/connections/")
+            response = await client.get("/")
         else:
             # Visiting the home page creates the existing calendar signing key.
-            assert (await client.get("/connections/")).status_code == 200
+            assert (await client.get("/")).status_code == 200
             response = await client.post(
                 "/connections/import-preview",
                 data={
@@ -271,7 +271,7 @@ async def test_every_owned_html_outcome_keeps_status_and_one_footer(
         assert response.headers["cache-control"] == "no-store"
     if outcome == "home":
         assert response.headers["referrer-policy"] == "no-referrer"
-        assert 'href="/connections/?view=companies"' in response.text
+        assert 'href="/?view=companies"' in response.text
     if outcome == "preview":
         assert '<form method="post" action="/connections/import-apply">' in response.text
     if outcome == "denied":

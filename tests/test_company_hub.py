@@ -479,7 +479,7 @@ async def test_ui_csp_zero_app_scripts_news_hiding_and_zero_holdings_leak(seeded
         ) as client,
     ):
         for view in ("upcoming", "companies", "digests", "calendar"):
-            resp = await client.get(f"/connections/?view={view}")
+            resp = await client.get(f"/?view={view}")
             assert resp.status_code == 200
             assert "/connections/assets/app.css" in resp.text
             assert "/connections/assets/app.js" in resp.text
@@ -492,12 +492,12 @@ async def test_ui_csp_zero_app_scripts_news_hiding_and_zero_holdings_leak(seeded
             assert "'unsafe-inline'" not in csp
 
         # Non-portfolio-admitted user must NEVER see holdings HTML on any tab.
-        upcoming = (await client.get("/connections/?view=upcoming")).text
+        upcoming = (await client.get("/?view=upcoming")).text
         assert "BETA" in upcoming
         assert "ALPHA" not in upcoming
         assert "filter=holdings" not in upcoming
 
-        companies = (await client.get("/connections/?view=companies")).text
+        companies = (await client.get("/?view=companies")).text
         companies_without_datalist = re.sub(
             r'<datalist id="companies">.*?</datalist>', "", companies, flags=re.S
         )
@@ -508,11 +508,11 @@ async def test_ui_csp_zero_app_scripts_news_hiding_and_zero_holdings_leak(seeded
         assert 'id="import-csv-popover"' not in companies
         assert "news-mute" not in companies
 
-        digests = (await client.get("/connections/?view=digests")).text
+        digests = (await client.get("/?view=digests")).text
         assert "Earnings alerts" in digests
         assert "Company news digest" not in digests
 
-        calendar_html = (await client.get("/connections/?view=calendar")).text
+        calendar_html = (await client.get("/?view=calendar")).text
         assert 'popovertarget="reset-feed-popover"' in calendar_html
         assert 'id="reset-feed-popover" popover' in calendar_html
 
@@ -536,14 +536,14 @@ async def test_ui_csp_zero_app_scripts_news_hiding_and_zero_holdings_leak(seeded
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        companies_on = (await client.get("/connections/?view=companies")).text
+        companies_on = (await client.get("/?view=companies")).text
         assert "Portfolio holdings" in companies_on
         assert "ALPHA" in companies_on
         assert 'popovertarget="import-csv-popover"' in companies_on
         assert 'id="import-csv-popover" popover' in companies_on
         assert "/connections/news-mute" in companies_on
 
-        digests_on = (await client.get("/connections/?view=digests")).text
+        digests_on = (await client.get("/?view=digests")).text
         assert "Company news digest" in digests_on
         assert "Paused until 2099-01-15" in digests_on
         assert format_utc_slot(23, 30, "Asia/Hong_Kong", ref_date=date(2026, 11, 26)) in digests_on
@@ -559,7 +559,7 @@ async def test_ui_csp_zero_app_scripts_news_hiding_and_zero_holdings_leak(seeded
             follow_redirects=False,
         )
         assert r_mute.status_code == 303
-        assert r_mute.headers["location"] == "/connections/?view=companies&keep_seen=1"
+        assert r_mute.headers["location"] == "/?view=companies&keep_seen=1"
         assert "ALPHA:XNAS" in accounts.profile(seeded.db, "alice")["settings"]["news_mutes"]
 
 
@@ -645,13 +645,13 @@ async def test_portfolio_not_admitted_blocks_import_ics_dual_listed_and_changed_
         assert "2026Q4" not in ics_resp.text
 
         # Companies tab: dual-listed ALPHA:XLON watchlist row must NOT show ALPHA:XNAS holding date.
-        companies = (await client.get("/connections/?view=companies")).text
+        companies = (await client.get("/?view=companies")).text
         assert "Alpha London" in companies
         assert "2026Q4" not in companies
         assert "2026Q1" in companies
 
         # Upcoming tab: hidden holding change must NOT trigger "Mark changes seen".
-        upcoming = (await client.get("/connections/?view=upcoming&keep_seen=1")).text
+        upcoming = (await client.get("/?view=upcoming&keep_seen=1")).text
         assert "Mark changes seen" not in upcoming
         assert "2026Q4" not in upcoming
         assert "BETA" in upcoming
@@ -738,7 +738,7 @@ async def test_news_unmute_clears_all_exchange_mute_via_rendered_form(seeded):
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        html_body = (await client.get("/connections/?view=companies")).text
+        html_body = (await client.get("/?view=companies")).text
         form_match = re.search(
             r'<form class="hub-inline-form" method="post" action="/connections/news-unmute">(.*?)</form>',
             html_body,
@@ -898,14 +898,14 @@ async def test_calendar_outlook_links_timezone_select_and_new_company_onboarding
         ) as client,
     ):
         # 1. Calendar tab: no broken Outlook web deep link; non-Windows keeps webcal:// subscribe button.
-        cal_html = (await client.get("/connections/?view=calendar")).text
+        cal_html = (await client.get("/?view=calendar")).text
         assert "/calendar/0/addcalendar" not in cal_html
         assert "outlook.live.com" not in cal_html
         assert "Add to Outlook" not in cal_html
         assert "webcal://earnings.example.com/calendar/" in cal_html
 
         # 2. Digests tab: Timezone is a <select> with full IANA options (not <input list> locked to HK).
-        digests_html = (await client.get("/connections/?view=digests")).text
+        digests_html = (await client.get("/?view=digests")).text
         assert '<select id="pref-tz" name="timezone" required>' in digests_html
         assert 'list="timezones"' not in digests_html
         assert '<option value="Asia/Hong_Kong" selected>Asia/Hong_Kong</option>' in digests_html
@@ -914,7 +914,7 @@ async def test_calendar_outlook_links_timezone_select_and_new_company_onboarding
         assert '<option value="Asia/Tokyo">Asia/Tokyo</option>' in digests_html
 
         # 3. Companies tab: supports requesting new untracked companies with exchange aliases, name, and IR URL.
-        companies_html = (await client.get("/connections/?view=companies")).text
+        companies_html = (await client.get("/?view=companies")).text
         assert 'popovertarget="request-company-popover"' in companies_html
         assert 'id="request-company-popover" popover' in companies_html
         assert 'name="ir_url"' in companies_html
@@ -934,7 +934,7 @@ async def test_calendar_outlook_links_timezone_select_and_new_company_onboarding
             follow_redirects=False,
         )
         assert r_new.status_code == 303
-        assert r_new.headers["location"] == "/connections/?view=companies&keep_seen=1"
+        assert r_new.headers["location"] == "/?view=companies&keep_seen=1"
         follows = PersonalStore(seeded.db, "alice").follows()
         queued = [f for f in follows if f["ticker"] == "NEWCO"]
         assert len(queued) == 1
@@ -942,7 +942,7 @@ async def test_calendar_outlook_links_timezone_select_and_new_company_onboarding
         assert queued[0]["state"] == "queued"
         assert queued[0]["company_name"] == "NewCo Synthetic"
 
-        companies_after = (await client.get("/connections/?view=companies")).text
+        companies_after = (await client.get("/?view=companies")).text
         assert "NewCo Synthetic" in companies_after
         assert "Discovering…" in companies_after
 
@@ -960,7 +960,7 @@ async def test_calendar_outlook_links_timezone_select_and_new_company_onboarding
         )
         assert r_name.status_code == 409
         assert "ticker" in r_name.text.lower() and "isin" in r_name.text.lower()
-        assert 'href="/connections/?view=companies"' in r_name.text
+        assert 'href="/?view=companies"' in r_name.text
 
 
 async def test_notices_enrich_payloads_with_timezone_holdings_and_issuer_name(seeded):
@@ -1113,7 +1113,7 @@ async def test_digests_delivery_history_isolation_and_brief_preview(seeded):
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        digests = await client.get("/connections/?view=digests")
+        digests = await client.get("/?view=digests")
         assert digests.status_code == 200
         assert "Preview next brief" in digests.text
         assert "Recent deliveries" in digests.text
@@ -1126,7 +1126,7 @@ async def test_digests_delivery_history_isolation_and_brief_preview(seeded):
         assert "brief:2026-11-25" not in digests.text
 
         seen_before = accounts.profile(seeded.db, "alice")["seen_seq"]
-        preview = await client.get("/connections/?view=preview")
+        preview = await client.get("/?view=preview")
         assert preview.status_code == 200
         assert "Back to digests" in preview.text
         assert "hub-preview-text" in preview.text
@@ -1161,7 +1161,7 @@ async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
         # 1. Windows via Chromium Client Hints: no webcal:// or broken Add to Outlook button; copyable HTTPS link present.
         win_ch = (
             await client.get(
-                "/connections/?view=calendar",
+                "/?view=calendar",
                 headers={
                     "Sec-CH-UA-Platform": '"Windows"',
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0",
@@ -1178,7 +1178,7 @@ async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
         # 2. Windows via User-Agent only (e.g. Firefox without Sec-CH-UA-Platform).
         win_ua = (
             await client.get(
-                "/connections/?view=calendar",
+                "/?view=calendar",
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
                 },
@@ -1191,7 +1191,7 @@ async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
         # 3. macOS / iOS keep the standard webcal:// button for Apple Calendar.
         mac_html = (
             await client.get(
-                "/connections/?view=calendar",
+                "/?view=calendar",
                 headers={
                     "Sec-CH-UA-Platform": '"macOS"',
                     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",

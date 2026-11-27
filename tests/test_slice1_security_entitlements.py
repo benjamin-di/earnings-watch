@@ -395,7 +395,7 @@ async def test_connections_ui_omits_unsafe_event_and_document_links(seeded):
             transport=httpx.ASGITransport(app=app), base_url="http://localhost"
         ) as client,
     ):
-        resp = await client.get("/connections/?view=upcoming")
+        resp = await client.get("/?view=upcoming")
         assert resp.status_code == 200
         html_body = resp.text
         assert "javascript:" not in html_body

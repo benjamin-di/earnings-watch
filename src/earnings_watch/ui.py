@@ -67,7 +67,7 @@ def _suite_bar(
     )
     parts = ['<header class="suite-bar"><div class="suite-inner">']
     if show_nav:
-        parts.append(f'<a class="suite-brand" href="/connections/">{brand_inner}</a>')
+        parts.append(f'<a class="suite-brand" href="/">{brand_inner}</a>')
     else:
         parts.append(f'<div class="suite-brand">{brand_inner}</div>')
 
@@ -220,7 +220,7 @@ def hub_page(
         ("calendar", "Calendar"),
     ]
     nav_links = "".join(
-        f'<a href="/connections/?view={key}"'
+        f'<a href="/?view={key}"'
         + (' aria-current="page"' if key == active_view else "")
         + f">{html.escape(label)}</a>"
         for key, label in tabs

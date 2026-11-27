@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.0] - 2026-11-27
+
+### Changed
+
+- Serve the Earnings Watch web home at canonical root `/` using `signin-window 0.15.0` and permanently redirect legacy `GET /connections` and `GET /connections/` (`308`, `Cache-Control: no-store`, preserving query parameters) to `/` while keeping OIDC and POST action routes under `/connections/*`.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.9.0; no schema change.
+
 ## [0.9.0] - 2026-11-27
 
 ### Added
