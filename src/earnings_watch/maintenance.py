@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from .engine.cadence import project_expected_earnings
 from .engine.reconcile import reconcile
-from .engine.verify import check_timing_candidates, verify_claims
+from .engine.verify import check_timing_candidates, rejection_covered, verify_claims
 from .errors import EarningsError
 from .llm.runner import AgentRunner, AgentTask, BudgetRunner, CliRunner
 from .model.events import Event, EventStatus, ExtractResult, TimingSelection
@@ -576,6 +576,26 @@ class Maintenance:
                                     merged = sorted(
                                         [*merged, projected], key=lambda item: (item.date, item.id)
                                     )
+                                verified_held = [
+                                    e for e in merged if e.status != EventStatus.EXPECTED
+                                ]
+                                uncovered_rejected = [
+                                    r
+                                    for r in checked.rejected
+                                    if not rejection_covered(
+                                        r.claim,
+                                        source,
+                                        [
+                                            e
+                                            for e in verified_held
+                                            if e.date == r.claim.date
+                                            or (
+                                                r.claim.date < today
+                                                and e.status == EventStatus.PAST
+                                            )
+                                        ],
+                                    )
+                                ]
                                 planned.extend(e.model_dump(mode="json") for e in merged)
                                 counts["events"] += len(merged)
                                 if not dry_run:
@@ -587,14 +607,14 @@ class Maintenance:
                                     )
                                     fetch_doc: dict[str, Any] = {
                                         "last_ok": now.isoformat(),
-                                        "rejected": [r.reason for r in checked.rejected],
+                                        "rejected": [r.reason for r in uncovered_rejected],
                                         "rejected_details": [
                                             {
                                                 "type": str(r.claim.type),
                                                 "date": r.claim.date.isoformat(),
                                                 "reason": r.reason,
                                             }
-                                            for r in checked.rejected[:5]
+                                            for r in uncovered_rejected[:5]
                                         ],
                                     }
                                     if researched:
@@ -604,12 +624,12 @@ class Maintenance:
                                             "last_agent_audit"
                                         ]
                                     self.catalogue.set_state("fetch_state", source.key, fetch_doc)
-                                if checked.rejected:
+                                if uncovered_rejected:
                                     errors.append(
                                         {
                                             "source": source.key,
                                             "reason": "claims_rejected",
-                                            "count": len(checked.rejected),
+                                            "count": len(uncovered_rejected),
                                         }
                                     )
                     except Exception as exc:

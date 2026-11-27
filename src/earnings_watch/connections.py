@@ -1210,7 +1210,11 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
 
             nav_view = "digests" if view == "preview" else view
             account_label = info.get("displayName") or info.get("email") or ""
-            coverage_warnings = service.status().get("coverage_warnings", [])
+            coverage_warnings = (
+                service.status().get("coverage_warnings", [])
+                if view in {"upcoming", "companies"}
+                else []
+            )
             return _hub_html(
                 hub_page(
                     page_title,
