@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timedelta, timezone
+import json
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from . import calendar, ics
 from .errors import EarningsError
-from .store.database import LibraryReader, PersonalStore, database_id
+from .store.database import LibraryReader, PersonalStore, connect, database_id
 from .store.accounts import effective_follows
 
 
@@ -303,7 +304,127 @@ class PersonService:
         )
 
     def status(self) -> dict[str, Any]:
-        return self.library.status() | self._freshness()
+        return (
+            self.library.status()
+            | self._freshness()
+            | {"coverage_warnings": self._coverage_warnings()}
+        )
+
+    def _coverage_warnings(self) -> list[dict[str, Any]]:
+        follows = [
+            row
+            for row in effective_follows(self.person.path, self.person.person)
+            if row.get("source_key")
+            and (self.include_holdings or not str(row.get("origin") or "").startswith("holdings:"))
+        ]
+        if not follows:
+            return []
+        sources_by_key = {s.key: s for s in self.library.sources()}
+        followed_keys: dict[str, str] = {}
+        for row in follows:
+            key = str(row["source_key"])
+            if key in sources_by_key and key not in followed_keys:
+                followed_keys[key] = sources_by_key[key].ticker
+        if not followed_keys:
+            return []
+
+        now = datetime.now(timezone.utc)
+        today = now.date()
+        soon_cutoff = today + timedelta(days=21)
+        events_by_key: dict[str, list[dict[str, Any]]] = {k: [] for k in followed_keys}
+        for ev in self.library.events():
+            issuer_key = ev.get("issuer_key")
+            if isinstance(issuer_key, str) and issuer_key in events_by_key:
+                events_by_key[issuer_key].append(ev)
+
+        fetch_states: dict[str, dict[str, Any]] = {}
+        heal_states: dict[str, dict[str, Any]] = {}
+        with connect(self.library.path) as db:
+            for key in followed_keys:
+                row = db.execute("SELECT doc FROM fetch_state WHERE key=?", (key,)).fetchone()
+                if row:
+                    fetch_states[key] = json.loads(row[0])
+                hrow = db.execute(
+                    "SELECT doc FROM heal_state WHERE key=?", ("source:" + key,)
+                ).fetchone()
+                if hrow:
+                    heal_states[key] = json.loads(hrow[0])
+
+        warnings: list[dict[str, Any]] = []
+        for key in sorted(followed_keys):
+            ticker = followed_keys[key]
+            ev_list = events_by_key[key]
+            if not ev_list:
+                warnings.append(
+                    {
+                        "source_key": key,
+                        "ticker": ticker,
+                        "kind": "no_events",
+                        "message": f"{ticker}: no tracked events",
+                    }
+                )
+            else:
+                has_confirmed_soon = any(
+                    ev.get("type") == "earnings"
+                    and ev.get("status") == "ir-confirmed"
+                    and today <= date.fromisoformat(ev["date"]) < soon_cutoff
+                    for ev in ev_list
+                )
+                if not has_confirmed_soon:
+                    for ev in ev_list:
+                        if ev.get("type") == "earnings" and ev.get("status") == "expected":
+                            ev_date = date.fromisoformat(ev["date"])
+                            if today <= ev_date < soon_cutoff:
+                                warnings.append(
+                                    {
+                                        "source_key": key,
+                                        "ticker": ticker,
+                                        "kind": "unconfirmed_soon",
+                                        "date": ev["date"],
+                                        "message": f"{ticker}: expected earnings on {ev['date']} still unconfirmed",
+                                    }
+                                )
+                                break
+
+            hstate = heal_states.get(key) or {}
+            if hstate.get("state") == "demoted":
+                demoted_raw = hstate.get("demoted_at")
+                demoted_dt: datetime | None = None
+                if isinstance(demoted_raw, str) and demoted_raw:
+                    try:
+                        demoted_dt = datetime.fromisoformat(demoted_raw)
+                    except ValueError:
+                        demoted_dt = None
+                elif isinstance(hstate.get("next_attempt"), str):
+                    try:
+                        demoted_dt = datetime.fromisoformat(hstate["next_attempt"]) - timedelta(
+                            days=1
+                        )
+                    except ValueError:
+                        demoted_dt = None
+                if demoted_dt is not None and (now - demoted_dt) > timedelta(hours=48):
+                    warnings.append(
+                        {
+                            "source_key": key,
+                            "ticker": ticker,
+                            "kind": "demoted",
+                            "message": f"{ticker}: source demoted for >48h",
+                        }
+                    )
+
+            fstate = fetch_states.get(key) or {}
+            rejected = fstate.get("rejected") or []
+            if rejected:
+                warnings.append(
+                    {
+                        "source_key": key,
+                        "ticker": ticker,
+                        "kind": "claims_rejected",
+                        "count": len(rejected),
+                        "message": f"{ticker}: {len(rejected)} claim(s) rejected in latest check",
+                    }
+                )
+        return warnings
 
     def _freshness(self) -> dict[str, Any]:
         status = self.library.status()

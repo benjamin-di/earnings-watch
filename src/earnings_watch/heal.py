@@ -34,7 +34,12 @@ async def repair(
     now = datetime.now(timezone.utc)
     if state.get("next_attempt") and datetime.fromisoformat(state["next_attempt"]) > now:
         return False
-    record = {"state": "demoted", "next_attempt": (now + timedelta(days=1)).isoformat()}
+    demoted_at = state.get("demoted_at") if state.get("state") == "demoted" else now.isoformat()
+    record = {
+        "state": "demoted",
+        "demoted_at": demoted_at,
+        "next_attempt": (now + timedelta(days=1)).isoformat(),
+    }
     if not dry_run:
         catalogue.set_state("heal_state", key, record)
     result = await runner.run(
@@ -63,5 +68,9 @@ async def repair(
         raise ValueError("repair page does not identify the requested issuer")
     if not dry_run:
         catalogue.put_source(updated)
-        catalogue.set_state("heal_state", key, record | {"state": "active"})
+        catalogue.set_state(
+            "heal_state",
+            key,
+            {"state": "active", "next_attempt": record["next_attempt"]},
+        )
     return True

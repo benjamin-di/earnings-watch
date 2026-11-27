@@ -10,7 +10,7 @@ import secrets
 import sqlite3
 import tempfile
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -315,14 +315,22 @@ class Catalogue(LibraryReader):
         run_id: str,
         authoritative: bool = False,
         removal_cap: int = 3,
+        today: date | None = None,
     ) -> None:
+        today_iso = (today or datetime.now(timezone.utc).date()).isoformat()
         with connect(self.path, write=True) as db:
             old = {
                 row["id"]: row
                 for row in db.execute("SELECT * FROM events WHERE source_key=?", (source_key,))
             }
             missing = set(old) - {event.id for event in events}
-            if authoritative and len(missing) > removal_cap:
+            expired_expected = {
+                event_id
+                for event_id in missing
+                if old[event_id]["date"] < today_iso
+                and json.loads(old[event_id]["doc"]).get("status") == "expected"
+            }
+            if authoritative and len(missing - expired_expected) > removal_cap:
                 raise EarningsError("temporarily_unavailable", "automatic removal cap exceeded")
             for event in events:
                 if (
@@ -355,21 +363,21 @@ class Catalogue(LibraryReader):
                     "INSERT INTO event_revisions(event_id,rev,change,doc,run_id,at) VALUES(?,?,?,?,?,?)",
                     (event.id, rev, change, encode(doc), run_id, now()),
                 )
-            if authoritative:
-                for event_id in missing:
-                    row = old[event_id]
-                    db.execute(
-                        "INSERT INTO event_revisions(event_id,rev,change,doc,run_id,at) VALUES(?,?,?,?,?,?)",
-                        (
-                            event_id,
-                            _next_revision(db, event_id, row["rev"]),
-                            "removed",
-                            row["doc"],
-                            run_id,
-                            now(),
-                        ),
-                    )
-                    db.execute("DELETE FROM events WHERE id=?", (event_id,))
+            to_remove = missing if authoritative else expired_expected
+            for event_id in to_remove:
+                row = old[event_id]
+                db.execute(
+                    "INSERT INTO event_revisions(event_id,rev,change,doc,run_id,at) VALUES(?,?,?,?,?,?)",
+                    (
+                        event_id,
+                        _next_revision(db, event_id, row["rev"]),
+                        "removed",
+                        row["doc"],
+                        run_id,
+                        now(),
+                    ),
+                )
+                db.execute("DELETE FROM events WHERE id=?", (event_id,))
 
     def state(self, table: str, key: str) -> Row:
         if table not in {"fetch_state", "heal_state", "release_watch"}:

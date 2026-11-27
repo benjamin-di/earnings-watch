@@ -27,7 +27,9 @@ portfolio_admitted_context: contextvars.ContextVar[bool] = contextvars.ContextVa
 MAX_RESPONSE = 128 * 1024
 _NULL_BRANCH = {"type": "null"}
 
-EventTypeLiteral = Literal["earnings", "earnings-call", "agm", "cmd", "dividend"]
+EventTypeLiteral = Literal[
+    "earnings", "earnings-call", "agm", "cmd", "dividend", "conference", "trading-update"
+]
 ScopeLiteral = Literal["following", "all"]
 DocRoleLiteral = Literal[
     "press-release",

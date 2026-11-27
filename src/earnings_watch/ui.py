@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import html
 import inspect
+from collections.abc import Sequence
+from typing import Any
 
 from signin_window import connections as renderer
 
@@ -63,6 +65,26 @@ def page(title: str, body: str, *, intro: str = "") -> str:
     return renderer.page(title, body, intro=intro, **options)
 
 
+def render_coverage_warnings(warnings: Sequence[dict[str, Any]] | None) -> str:
+    """Render concise, escaped HTML coverage warnings for the Web UI status section."""
+    if not warnings:
+        return ""
+    items = "".join(
+        f"<li>{html.escape(str(item.get('message') or item.get('ticker') or item.get('source_key') or ''))}</li>"
+        for item in warnings[:5]
+    )
+    overflow = (
+        f'<p class="muted small">+{len(warnings) - 5} more coverage warning(s)</p>'
+        if len(warnings) > 5
+        else ""
+    )
+    return (
+        '<section class="notice coverage-warnings" role="status" aria-label="Coverage warnings">'
+        f"<strong>Coverage warnings ({len(warnings)})</strong>"
+        f"<ul>{items}</ul>{overflow}</section>"
+    )
+
+
 def hub_page(
     title: str,
     body: str,
@@ -71,6 +93,7 @@ def hub_page(
     active_view: str = "upcoming",
     account_label: str = "",
     show_nav: bool = True,
+    coverage_warnings: Sequence[dict[str, Any]] | None = None,
 ) -> str:
     """Render the owned Earnings Watch web shell with external assets and strict CSP."""
     asset_v = html.escape(f"{BUILD.version}-{BUILD.short_revision}", quote=True)
@@ -120,6 +143,7 @@ def hub_page(
         f'<main id="main" tabindex="-1">'
         f'<div class="page-top"><div><div class="eyebrow">Earnings Watch</div><h1>{html.escape(title)}</h1>{intro_html}</div></div>'
         '<div id="status-banner" class="status-banner" role="status" aria-live="polite"></div>'
+        f"{render_coverage_warnings(coverage_warnings)}"
         f"{body}</main>"
         f"{_identity_footer()}"
         "</div></body></html>"

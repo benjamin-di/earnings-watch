@@ -16,7 +16,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from .model.urls import public_url
+from .model.urls import apex_domain, public_url
 
 MAX_BYTES = 12 * 1024 * 1024
 
@@ -42,8 +42,12 @@ class Transport:
         sec_contact: str = "",
         policies: dict[str, dict] | None = None,
         cache_max_bytes: int = 512 * 1024 * 1024,
+        apex_domains: set[str] | None = None,
     ):
         self.hosts = {h.lower() for h in hosts}
+        self.apex_domains = (
+            {a for d in apex_domains if d and (a := apex_domain(d))} if apex_domains else set()
+        )
         self.state, self.budget, self.pace = state, daily_budget, pace
         self.mock, self.resolver = mock, resolver
         self.sec_contact = sec_contact
@@ -92,8 +96,11 @@ class Transport:
             ) as client:
                 for _ in range(11):
                     url = public_url(url)
-                    host = urlsplit(url).hostname or ""
-                    if host not in self.hosts:
+                    host = (urlsplit(url).hostname or "").lower()
+                    host_apex = apex_domain(host)
+                    if host not in self.hosts and not (
+                        self.apex_domains and bool(host_apex) and host_apex in self.apex_domains
+                    ):
                         raise ValueError("host is outside the configured issuer/provider allowlist")
                     hop_user_agent = user_agent
                     if host in {"data.sec.gov", "www.sec.gov"}:

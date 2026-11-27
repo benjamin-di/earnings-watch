@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.7.0] - 2026-11-27
+
+### Added
+
+- Expand `EventType` with `conference` and `trading-update`, add `DatePrecision` (`exact`, `week_of`, `month`, `tentative`), and disambiguate recurring/multi-milestone dividend IDs.
+- Emit `dividend`, `conference`, and `trading-update` in calendar plans and `.ics` feeds, prefix `expected` events with `[Est.] ` across UI and ICS, and display `week_of`/`month`/`tentative` date precision honestly.
+- Add deterministic official discovery adapters: Q4 Inc JSON events and press releases (`providers/q4_ir.py`), HKEXnews board-meeting/AGM/dividend notices with bounded `pypdf` PDF extraction (`providers/hkexnews.py`, `providers/pdf.py`), SEC EDGAR `DEF 14A` and historical 8-K/6-K discovery (`providers/sec_edgar.py`), and `.ics`/JSON-LD/PDF support in `providers/generic_ir.py`.
+- Add pure-engine historical cadence projection (`engine/cadence.py`) so active issuers without a confirmed upcoming earnings date maintain an `[Est.]` `expected` placeholder that automatically promotes on issuer confirmation and retires cleanly if unconfirmed past its date.
+- Upgrade the IR Analyst research loop with hardened registrable apex-domain + official exchange scoping (`model/urls.py`, `transport.py`), 10-turn multi-surface checklist prompts with bounded Layer 1 official documents, 1-turn verification-rejection repair (`research.repair_rejected()`), rolling weekly deep audits, and `coverage_warnings` in `PersonService.status()` and Connections UI (respecting `include_holdings`).
+
+### Fixed
+
+- Fix combined results-and-conference-call classification in `engine/timing.py` and `engine/verify.py` so combined calendar rows remain `ir-confirmed` across multi-sweep reconciliations, and normalize comma-formatted US dates in `"Week of ..."` precision inference.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.6.3, 0.6.2, 0.6.1, and 0.6.0; no schema change.
+
+[0.7.0]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.7.0
+
 ## [0.6.3] - 2026-11-27
 
 ### Fixed

@@ -291,6 +291,8 @@ def reconcile(
         if old.date < today - timedelta(days=PAST_RETIRE_DAYS) and identifier not in retain_ids:
             continue
         if old.date < today:
+            if old.status == EventStatus.EXPECTED:
+                continue
             merged[identifier] = old.model_copy(update={"status": EventStatus.PAST})
             continue
         universe_exit = old.issuer_key not in active_source_keys

@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from earnings_watch.model.limits import PAST_RETIRE_DAYS
 from collections.abc import Iterable
 from earnings_watch.model.events import (
+    DatePrecision,
     Event,
     EventStatus,
     EventType,
@@ -18,6 +19,7 @@ from earnings_watch.model.events import (
 )
 from earnings_watch.model.sources import Source, canonical_period, event_id
 from .timing import (
+    CALL_ONLY_RESULTS,
     board_only,
     clock_key,
     evidence_clock_key,
@@ -94,6 +96,76 @@ _NON_PUBLICATION_WORD_RE = re.compile(
 )
 _SUBJECT_WORD_RE = re.compile("\\b(?:results?|earnings|figures)\\b", re.IGNORECASE)
 _UNIT_BOUNDARY_RE = re.compile("\\n+|;|(?<=[.!?])(?<![ap]\\.m\\.)\\s+(?=[A-Z#\\[])")
+_RESULTS_PHRASE_RE = re.compile(
+    "\\b(?:preliminary\\s+results?|earnings\\s+report|interim\\s+report|"
+    "financial\\s+results?|annual\\s+results?|quarterly\\s+results?)\\b",
+    re.IGNORECASE,
+)
+_CONFERENCE_OR_CALL_RE = re.compile(
+    "\\b(?:conference\\s+call|annual\\s+media\\s+conference|media\\s+conference|"
+    "press\\s+conference|analyst\\s+call|investor\\s+call|webcast)\\b",
+    re.IGNORECASE,
+)
+_WEEK_OF_RE = re.compile("\\bweek\\s+of\\b", re.IGNORECASE)
+
+
+def _is_combined_results_and_call(evidence: str) -> bool:
+    return bool(_RESULTS_PHRASE_RE.search(evidence) and _CONFERENCE_OR_CALL_RE.search(evidence))
+
+
+def _date_spans_for_event(event_date: date, evidence: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    normalized = _normalized_date_text(evidence)
+    for pattern, date_format in _DATE_PATTERNS:
+        for match in pattern.finditer(normalized):
+            raw = re.sub("\\bSept\\b", "Sep", match.group(1), flags=re.I)
+            raw = re.sub(r",\s*", " ", raw)
+            try:
+                parsed = datetime.strptime(raw, date_format).replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if parsed.date() == event_date:
+                spans.append(match.span(1))
+    for pattern in _YEARLESS_DATE_RES:
+        for match in pattern.finditer(normalized):
+            day = int(match.group("day"))
+            month = datetime.strptime(match.group("month")[:3].title(), "%b").month
+            if day == event_date.day and month == event_date.month:
+                spans.append(match.span())
+    return spans
+
+
+def _inferred_date_precision(claim: ExtractClaim) -> DatePrecision:
+    if claim.date_precision != DatePrecision.EXACT:
+        return claim.date_precision
+    normalized = _normalized_date_text(claim.evidence)
+    week_matches = list(_WEEK_OF_RE.finditer(normalized))
+    if not week_matches:
+        return DatePrecision.EXACT
+    date_spans = _date_spans_for_event(claim.date, claim.evidence)
+    for week_match in week_matches:
+        for start, end in date_spans:
+            if (0 <= start - week_match.end() <= 40) or (0 <= week_match.start() - end <= 20):
+                return DatePrecision.WEEK_OF
+    return DatePrecision.EXACT
+
+
+def _finalize_event(event: Event) -> Event:
+    finalized = with_legacy_evidence(event)
+    if (
+        event.type == EventType.EARNINGS
+        and _is_combined_results_and_call(event.evidence)
+        and finalized.timing_issue == CALL_ONLY_RESULTS
+        and event.timing_issue != CALL_ONLY_RESULTS
+    ):
+        finalized = finalized.model_copy(
+            update={
+                "status": event.status,
+                "time_hint": event.time_hint,
+                "timing_issue": event.timing_issue,
+            }
+        )
+    return finalized
 
 
 @dataclass(frozen=True)
@@ -335,6 +407,8 @@ def timing_evidence(
         if claim.type == EventType.EARNINGS_CALL
         else TimingKind.BOARD_APPROVAL
         if board_only(claim.evidence)
+        else TimingKind.PUBLICATION
+        if _is_combined_results_and_call(claim.evidence)
         else TimingKind.PRESS_CONFERENCE
         if is_press_conference(claim.evidence)
         else TimingKind.PUBLICATION
@@ -698,6 +772,7 @@ def verify_claims(
             type=claim.type,
             period=period,
             date=claim.date,
+            date_precision=_inferred_date_precision(claim),
             time_hint=hint,
             release_time=release_time,
             release_tz=release_tz,
@@ -760,7 +835,7 @@ def verify_claims(
             events = [e for e in events if e.id != identifier]
         events.append(item)
     return VerificationResult(
-        events=tuple((with_legacy_evidence(e) for e in events)),
+        events=tuple((_finalize_event(e) for e in events)),
         rejected=tuple(rejected),
         merged=tuple(merged),
     )
@@ -771,4 +846,4 @@ def reverify_event(
 ) -> Event | None:
     if not evidence_verifies(event.date, event.evidence, page_text, us_dates=us_dates):
         return None
-    return with_legacy_evidence(event.model_copy(update={"last_verified": today}))
+    return _finalize_event(event.model_copy(update={"last_verified": today}))

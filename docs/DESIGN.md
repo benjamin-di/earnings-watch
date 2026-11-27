@@ -1,6 +1,6 @@
 # Design decisions
 
-Earnings Watch describes the task and retains the `earnings_` MCP namespace. It combines an evidence-backed issuer calendar with document discovery; it is not a price feed or a forecast of earnings dates.
+Earnings Watch describes the task and retains the `earnings_` MCP namespace. It combines an evidence-backed issuer calendar (covering earnings, earnings calls, AGMs, Capital Markets Days, dividends, investor conferences, and trading updates) with document discovery. When an issuer has not yet confirmed its next reporting date, the engine may project a clearly marked `expected` (`[Est.]`) cadence placeholder from verified official history; it is not a price feed or an analyst consensus estimate.
 
 The design uses three familiar patterns: a pure validation/reconciliation core, a shared catalogue with personal projections, and a durable outbox. SQLite keeps backup and installation simple for one host. A database server, built-in OAuth issuer and plugin loader would add operational boundaries without improving this workload.
 

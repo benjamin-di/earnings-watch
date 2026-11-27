@@ -47,10 +47,12 @@ def pre_earnings_call(evidence: str) -> bool:
 
 
 _COMBINED_RESULTS_CALL = re.compile(
-    r"\b(?:(?:earnings|interim|quarterly|annual)\s+report|"
-    r"(?:preliminary|financial|annual|full[-\s]year|half[-\s]year|interim|quarterly|q[1-4]|h[12]|fy)\b"
-    r"(?:\s+\d{4})?\s+(?:results?|earnings)(?:\s+for\b[^.;\n]{0,40}?)?"
-    r"(?:\s+(?:with|and)\b|\s*&\s*)[^.;\n]*?\b(?:call|webcast))\b",
+    r"\b(?:(?:earnings|interim|quarterly|annual|full[-\s]year|half[-\s]year)\s+report"
+    r"|(?:preliminary|financial|annual|full[-\s]year|half[-\s]year|interim|quarterly|q[1-4]|h[12]|fy)\b"
+    r"(?:\s+\d{4})?\s+(?:results?|earnings))"
+    r"(?:(?!\b(?:call|webcast|presentation|briefing)\b)[^.;\n]){0,50}?"
+    r"(?:\s+(?:with|and)\b|\s*[,/|&-]\s*)"
+    r"[^.;\n]*?\b(?:call|webcast)\b",
     re.I,
 )
 

@@ -1085,13 +1085,13 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     if auth
                     else Response("Browser sign-in is not configured.", 503)
                 )
-            service = open_service(settings, person)
             profile = accounts.profile(settings.db, person)
             page_seq = Catalogue(settings.db).status()["sequence"]
             seen = profile.get("seen_seq") or 0
             changed = accounts.changed_ids(settings.db, person, seen, page_seq)
             follows = PersonalStore(settings.db, person).follows()
             show_holdings = _is_portfolio_admitted(info, follows)
+            service = open_service(settings, person, include_holdings=show_holdings)
             news_enabled = settings.integrations.news_digest.enabled
 
             view = request.query_params.get("view", "upcoming")
@@ -1141,6 +1141,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
 
             nav_view = "digests" if view == "preview" else view
             account_label = info.get("displayName") or info.get("email") or ""
+            coverage_warnings = service.status().get("coverage_warnings", [])
             return _hub_html(
                 hub_page(
                     page_title,
@@ -1148,6 +1149,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     intro=page_intro,
                     active_view=nav_view,
                     account_label=account_label,
+                    coverage_warnings=coverage_warnings,
                 )
             )
         except EarningsError as exc:

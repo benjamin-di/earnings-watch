@@ -16,6 +16,15 @@ class EventType(StrEnum):
     AGM = "agm"
     CMD = "cmd"
     DIVIDEND = "dividend"
+    CONFERENCE = "conference"
+    TRADING_UPDATE = "trading-update"
+
+
+class DatePrecision(StrEnum):
+    EXACT = "exact"
+    WEEK_OF = "week_of"
+    MONTH = "month"
+    TENTATIVE = "tentative"
 
 
 class EventStatus(StrEnum):
@@ -209,6 +218,7 @@ class Event(ReleaseTimeMixin):
     type: EventType
     period: str
     date: Date
+    date_precision: DatePrecision = DatePrecision.EXACT
     time_hint: TimeHint | None = None
     timing: TimingEvidence | None = None
     timing_issue: str | None = None
@@ -259,6 +269,7 @@ class ExtractClaim(ReleaseTimeMixin):
     type: EventType
     period: str
     date: Date
+    date_precision: DatePrecision = DatePrecision.EXACT
     time_hint: TimeHint | None = None
     timing_kind: TimingKind | None = None
     timing_candidates: list[TimingCandidate] = Field(default_factory=list, max_length=4)

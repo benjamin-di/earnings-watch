@@ -15,23 +15,31 @@ from .errors import EarningsError
 from .store.database import PersonalStore, digest, encode, legacy_blocked
 
 
+_CALENDAR_TYPES = frozenset(
+    {"earnings", "earnings-call", "agm", "cmd", "dividend", "conference", "trading-update"}
+)
+
+
 def desired(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     entries = []
     for event in events:
-        if (
-            event["type"] not in {"earnings", "earnings-call", "agm", "cmd"}
-            or event["status"] == "past"
-        ):
+        if event["type"] not in _CALENDAR_TYPES or event["status"] == "past":
             continue
         day = event["date"]
         exact = (
             event.get("release_time") and event.get("release_tz") and not event.get("timing_issue")
         )
         title = f"{event['ticker']} {event['period']} {event['type']}"
+        if event["status"] == "expected":
+            title = f"[Est.] {title}"
+        body_lines = [event["evidence"], event["source_url"]]
+        precision = event.get("date_precision")
+        if precision is not None and precision != "exact":
+            body_lines.append(f"Date precision: {precision}")
         entry = {
             "key": "earnings-watch:" + event["id"],
             "title": title,
-            "body": event["evidence"] + "\n" + event["source_url"],
+            "body": "\n".join(body_lines),
             "all_day": not bool(exact),
         }
         if exact:

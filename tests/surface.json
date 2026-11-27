@@ -99,7 +99,9 @@
                 "earnings-call",
                 "agm",
                 "cmd",
-                "dividend"
+                "dividend",
+                "conference",
+                "trading-update"
               ],
               "type": "string"
             },

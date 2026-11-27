@@ -220,12 +220,68 @@ def _canonical_non_earnings_period(raw: str, event_type: EventType, event_date) 
         return str(year)
     if event_type == EventType.CMD:
         return str(year)
+    if event_type == EventType.CONFERENCE:
+        return f"{event_date.isoformat()}-conference"
+    if event_type == EventType.TRADING_UPDATE:
+        tokens = _period_tokens(raw)
+        if len(tokens.quarters) == 1:
+            quarter = next(iter(tokens.quarters))
+            return f"{year}Q{quarter}-trading-update"
+        if tokens.nine:
+            return f"{year}Q3-trading-update"
+        if tokens.first_half and not (tokens.second_half or tokens.full_year):
+            return f"{year}H1-trading-update"
+        if tokens.second_half and not tokens.first_half:
+            return f"{year}H2-trading-update"
+        return f"{event_date.isoformat()}-trading-update"
     if event_type == EventType.DIVIDEND:
+        kind: str | None = None
         if "interim" in value:
-            return f"{year}-interim-dividend"
-        if re.search("\\b(?:special|extraordinary)\\b", value):
-            return f"{year}-special-dividend"
-        return f"{year}-dividend"
+            kind = "interim"
+        elif re.search("\\b(?:special|extraordinary)\\b", value):
+            kind = "special"
+        milestone: str | None = None
+        if re.search("\\bex[\\s-]*div(?:idend)?\\b|\\bex\\s+date\\b", value):
+            milestone = "ex"
+        elif re.search("\\brecord(?:\\s+date)?\\b", value):
+            milestone = "record"
+        elif re.search("\\b(?:pay|paid|payable|payment)(?:\\s+date)?\\b", value):
+            milestone = "pay"
+        tokens = _period_tokens(raw)
+        if len(tokens.quarters) == 1:
+            quarter = next(iter(tokens.quarters))
+            qualifier = milestone or kind
+            return (
+                f"{year}Q{quarter}-{qualifier}-dividend"
+                if qualifier
+                else f"{year}Q{quarter}-dividend"
+            )
+        ym_match = re.search("\\b(20\\d{2})-(0[1-9]|1[0-2])\\b", raw)
+        month_match = re.search(f"\\b(?P<month>{_MONTH_NAMES})\\b", raw, re.IGNORECASE)
+        month: int | None = None
+        month_year = year
+        if ym_match:
+            month_year = int(ym_match.group(1))
+            month = int(ym_match.group(2))
+        elif month_match:
+            month = _MONTH_NUMBERS[month_match.group("month")[:3].lower()]
+        elif "quarterly" in value:
+            month_year = event_date.year
+            month = event_date.month
+        if month is not None:
+            qualifier = milestone or kind
+            return (
+                f"{month_year}-{month:02d}-{qualifier}-dividend"
+                if qualifier
+                else f"{month_year}-{month:02d}-dividend"
+            )
+        parts = [str(year)]
+        if kind:
+            parts.append(kind)
+        if milestone:
+            parts.append(milestone)
+        parts.append("dividend")
+        return "-".join(parts)
     raise ValueError(f"unsupported event type: {event_type}")
 
 

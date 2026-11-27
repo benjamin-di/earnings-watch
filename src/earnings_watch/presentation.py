@@ -13,6 +13,7 @@ _TYPE_LABELS = {
     "earnings": "Results",
     "agm": "AGM",
     "dividend": "Dividend",
+    "conference": "Conference",
     "capital-markets-day": "Capital Markets Day",
     "investor-day": "Investor Day",
     "trading-update": "Trading Update",
@@ -71,6 +72,13 @@ def present(event, person, library, *, sources_by_key: dict[str, Any] | None = N
             "AMC": ", after market close",
             "DURING": ", during market hours",
         }.get(event["time_hint"], "")
+    precision = event.get("date_precision")
+    if precision == "week_of":
+        when = f"Week of {when} (tentative)"
+    elif precision == "month":
+        when = datetime.fromisoformat(event["date"]).strftime("%b %Y") + " (month estimate)"
+    elif precision == "tentative":
+        when = f"{when} (tentative)"
     followed = [
         r
         for r in effective_follows(person.path, person.person)
@@ -81,10 +89,13 @@ def present(event, person, library, *, sources_by_key: dict[str, Any] | None = N
     source = sources_by_key.get(event["issuer_key"])
     company_name = source.name if source is not None else event["ticker"]
     summary = format_event_summary(event["period"], event["type"])
+    title = format_event_title(event["ticker"], event["period"], event["type"])
+    if event.get("status") == "expected":
+        title = f"[Est.] {title}"
     data.update(
         company_name=company_name,
         summary=summary,
-        title=format_event_title(event["ticker"], event["period"], event["type"]),
+        title=title,
         when=when,
         certainty=certainty,
         why_followed=sorted(
