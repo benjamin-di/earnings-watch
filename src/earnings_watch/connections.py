@@ -12,15 +12,6 @@ import json
 import os
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from issuer_sources.model import (
-    IrUrls,
-    LibraryTargetsPayload,
-    PeriodScheme,
-    PersonScope,
-    TargetCompany,
-    VerifiedDocument,
-    normalize_document_category,
-)
 from signin_window.oidc import BrowserAuth, OIDCConfig
 from starlette.applications import Starlette
 from starlette.datastructures import UploadFile
@@ -210,6 +201,23 @@ async def _targets_payload(settings, directory) -> dict:
     return {"schema": 1, "generated_at": generated_at, "people": result_people}
 
 
+_ROLE_TO_CATEGORY: dict[str, str] = {
+    "release": "results_release",
+    "results_release": "results_release",
+    "earnings_release": "results_release",
+    "press_release": "results_release",
+    "statements": "financial_statements",
+    "financial_statements": "financial_statements",
+    "presentation": "presentation",
+    "slides": "presentation",
+    "deck": "presentation",
+    "transcript": "transcript",
+    "prepared_remarks": "transcript",
+    "databook": "databook",
+    "spreadsheet": "databook",
+}
+
+
 async def _library_targets_payload(settings, directory, *, schema_version: int = 1) -> dict:
     generated_at = datetime.now(timezone.utc).isoformat()
     library = LibraryReader(settings.db)
@@ -232,7 +240,7 @@ async def _library_targets_payload(settings, directory, *, schema_version: int =
             "first_seen": str(doc.get("first_seen") or ""),
         }
         if schema_version == 2:
-            entry["category"] = normalize_document_category(role_val).value
+            entry["category"] = _ROLE_TO_CATEGORY.get(role_val.strip().lower(), "other")
         docs_by_source.setdefault(source_key, []).append(entry)
 
     active_source_keys: set[str] = set()
@@ -260,37 +268,38 @@ async def _library_targets_payload(settings, directory, *, schema_version: int =
         scopes.append({"person": subject, "source_keys": sorted(person_keys)})
 
     if schema_version == 2:
-        v2_companies = [
-            TargetCompany(
-                source_key=source.key,
-                ticker=source.ticker,
-                exchange=source.exchange or "",
-                name=source.name,
-                isin=source.isin,
-                sec_cik=source.sec_cik,
-                hkex_stock_id=source.hkex_stock_id,
-                lei=source.lei,
-                fy_end_month=source.fy_end_month,
-                period_scheme=PeriodScheme(source.period_scheme.value),
-                ir_urls=IrUrls(
-                    calendar=source.calendar_url,
-                    results=source.results_url,
-                    announcements=source.announcements_url,
-                ),
-                verified_documents=[
-                    VerifiedDocument.model_validate(d) for d in docs_by_source.get(source.key, [])
-                ],
-            )
+        v2_companies: list[dict] = [
+            {
+                "source_key": source.key,
+                "ticker": source.ticker,
+                "exchange": source.exchange or "",
+                "name": source.name,
+                "isin": source.isin,
+                "sec_cik": source.sec_cik,
+                "hkex_stock_id": source.hkex_stock_id,
+                "lei": source.lei,
+                "fy_end_month": source.fy_end_month,
+                "period_scheme": source.period_scheme.value,
+                "ir_urls": {
+                    "calendar": source.calendar_url,
+                    "results": source.results_url,
+                    "announcements": source.announcements_url,
+                    "presentations": None,
+                    "transcripts": None,
+                    "archive": None,
+                    "extra": [],
+                },
+                "verified_documents": docs_by_source.get(source.key, []),
+            }
             for source_key in sorted(active_source_keys)
             for source in (sources_by_key[source_key],)
         ]
-        v2_payload = LibraryTargetsPayload(
-            schema=2,
-            generated_at=generated_at,
-            companies=v2_companies,
-            scopes=[PersonScope.model_validate(s) for s in scopes],
-        )
-        return v2_payload.model_dump(by_alias=True, mode="json")
+        return {
+            "schema": 2,
+            "generated_at": generated_at,
+            "companies": v2_companies,
+            "scopes": scopes,
+        }
 
     companies: list[dict] = []
     for source_key in sorted(active_source_keys):

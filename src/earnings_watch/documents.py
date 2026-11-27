@@ -10,32 +10,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from issuer_sources.model import IrUrls, IssuerIdentity, PeriodScheme
-from issuer_sources.webpage import PageCapture, PageLink, verify_document_link
-
 from .model.sources import Source, period_consistent
+from .model.urls import public_url, same_apex
 from .store.database import digest
 from .transport import Transport
 
+_ROLE_PATTERNS: dict[str, str] = {
+    "release": r"result|earning|release",
+    "presentation": r"presentation|slides?|deck",
+    "transcript": r"transcript|prepared\s+remarks|conference\s+call|earnings\s+call",
+    "databook": r"databook|data\s+book|fact\s*sheet|supplement|spreadsheet|excel|xlsx",
+    "statements": r"statement|report|financial",
+    "other": r".",
+}
 
-def _to_issuer_identity(source: Source) -> IssuerIdentity:
-    return IssuerIdentity(
-        source_key=source.key,
-        ticker=source.ticker,
-        exchange=source.exchange or "",
-        name=source.name,
-        isin=source.isin,
-        sec_cik=source.sec_cik,
-        hkex_stock_id=source.hkex_stock_id,
-        lei=source.lei,
-        fy_end_month=source.fy_end_month,
-        period_scheme=PeriodScheme(source.period_scheme.value),
-        ir_urls=IrUrls(
-            calendar=source.calendar_url,
-            results=source.results_url,
-            announcements=source.announcements_url,
-        ),
-    )
+
+def _official_host(host: str | None, registered: set[str]) -> bool:
+    if not host:
+        return False
+    lower = host.lower()
+    return lower in registered or any(same_apex(lower, reg) for reg in registered)
 
 
 def verify_link(
@@ -49,68 +43,45 @@ def verify_link(
     url, title, evidence = link["url"], link.get("title", ""), link.get("evidence", "")
     role = link.get("role", "other")
     evidence_url = link.get("evidence_url", source.results_url or source.calendar_url)
-    if capture_links is not None:
-        normalized_links = tuple(
-            PageLink(url=str(item["url"]), title=str(item.get("title") or ""))
-            for item in capture_links
-            if isinstance(item, dict) and item.get("url")
-        )
-        check = verify_document_link(
-            _to_issuer_identity(source),
-            PageCapture(url=evidence_url, text=page_text, links=normalized_links),
-            url=url,
-            title=title,
-            evidence=evidence,
-            category=role,
-            period=event["period"],
-            event_id=event["id"],
-        )
-        return {
-            "id": digest([event["id"], url]),
-            "event_id": event["id"],
-            "role": role,
-            "url": check.document.url,
-            "title": check.document.title,
-            "evidence": check.document.evidence,
-            "evidence_url": evidence_url,
-            "verified": check.verified,
-            "unverified_reason": None
-            if check.verified
-            else (check.reason or "issuer, period, role or verbatim evidence not established"),
-            "first_seen": check.document.first_seen,
-            "sha256": "",
-        }
     hosts = {
-        urlsplit(u).hostname
+        h.lower()
         for u in (source.calendar_url, source.results_url, source.announcements_url)
-        if u
+        if u and (h := urlsplit(u).hostname)
     }
-    official = urlsplit(url).hostname in hosts
+    if capture_links is not None:
+        try:
+            norm_url = public_url(url)
+            norm_evidence_url = public_url(evidence_url)
+        except ValueError:
+            official = False
+            norm_url = url
+        else:
+            captured_urls: set[str] = set()
+            for item in capture_links:
+                if isinstance(item, dict) and item.get("url"):
+                    try:
+                        captured_urls.add(public_url(str(item["url"])))
+                    except ValueError:
+                        pass
+            official = (
+                _official_host(urlsplit(norm_evidence_url).hostname, hosts)
+                and norm_url in captured_urls
+            )
+    else:
+        norm_url = url
+        official = (urlsplit(url).hostname or "").lower() in hosts
     verbatim = (
         bool(evidence)
         and " ".join(evidence.split()).casefold() in " ".join(page_text.split()).casefold()
     )
     period = period_consistent(title + " " + evidence, source, event["period"])
-    role_evidence = bool(
-        re.search(
-            {
-                "release": r"result|earning|release",
-                "presentation": r"presentation|slides?|deck",
-                "transcript": r"transcript|prepared\s+remarks|conference\s+call|earnings\s+call",
-                "databook": r"databook|data\s+book|fact\s*sheet|supplement|spreadsheet|excel|xlsx",
-                "statements": r"statement|report|financial",
-                "other": r".",
-            }.get(role, r"(?!)"),
-            title + " " + evidence,
-            re.I,
-        )
-    )
+    role_evidence = bool(re.search(_ROLE_PATTERNS.get(role, r"(?!)"), title + " " + evidence, re.I))
     verified = official and verbatim and period and role_evidence
     return {
         "id": digest([event["id"], url]),
         "event_id": event["id"],
         "role": role,
-        "url": url,
+        "url": norm_url,
         "title": title[:120],
         "evidence": evidence[:500],
         "evidence_url": evidence_url,

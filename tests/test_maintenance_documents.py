@@ -88,11 +88,11 @@ async def test_documents_verify_period_and_download_idempotently(seeded, tmp_pat
     # Official IR page linking to a CDN-hosted presentation and transcript is verified by provenance.
     cdn_links = [
         {
-            "url": "https://s2.q4cdn.com/99/q4-2026-slides.pdf",
+            "url": "https://cdn.assets.example/99/q4-2026-slides.pdf",
             "title": "Q4 2026 Investor Presentation",
         },
         {
-            "url": "https://d1io3yog0oux5.cloudfront.net/issuer/q4-2026-transcript.pdf",
+            "url": "https://files.cdn.example/issuer/q4-2026-transcript.pdf",
             "title": "Q4 2026 Earnings Call Transcript",
         },
     ]
@@ -100,7 +100,7 @@ async def test_documents_verify_period_and_download_idempotently(seeded, tmp_pat
         src,
         row,
         {
-            "url": "https://s2.q4cdn.com/99/q4-2026-slides.pdf",
+            "url": "https://cdn.assets.example/99/q4-2026-slides.pdf",
             "title": "Q4 2026 Investor Presentation",
             "role": "presentation",
             "evidence": "Q4 2026 Investor Presentation",
@@ -114,7 +114,7 @@ async def test_documents_verify_period_and_download_idempotently(seeded, tmp_pat
         src,
         row,
         {
-            "url": "https://d1io3yog0oux5.cloudfront.net/issuer/q4-2026-transcript.pdf",
+            "url": "https://files.cdn.example/issuer/q4-2026-transcript.pdf",
             "title": "Q4 2026 Earnings Call Transcript",
             "role": "transcript",
             "evidence": "Q4 2026 Earnings Call Transcript",
@@ -128,7 +128,7 @@ async def test_documents_verify_period_and_download_idempotently(seeded, tmp_pat
         src,
         row,
         {
-            "url": "https://s2.q4cdn.com/99/hallucinated.pdf",
+            "url": "https://cdn.assets.example/99/hallucinated.pdf",
             "title": "Q4 2026 Investor Presentation",
             "role": "presentation",
             "evidence": "Q4 2026 Investor Presentation",
