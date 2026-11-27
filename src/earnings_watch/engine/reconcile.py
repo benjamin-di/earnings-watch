@@ -12,7 +12,7 @@ from earnings_watch.model.events import (
     TimingResolution,
     TimingSelection,
 )
-from earnings_watch.model.sources import event_id
+from earnings_watch.model.sources import event_id, same_day_dedupe_key
 from .timing import (
     CALL_ONLY_RESULTS,
     kind_for,
@@ -255,6 +255,38 @@ def results_from_calls(
     return tuple(derived)
 
 
+def _dedupe_same_day_non_earnings(events: list[Event]) -> tuple[list[Event], set[str]]:
+    """Collapse same-issuer, same-subtype, same-date non-earnings rows with different period aliases."""
+    buckets: dict[tuple[str, str, str, str], list[Event]] = {}
+    passthrough: list[Event] = []
+    for event in events:
+        key = same_day_dedupe_key(event.type, event.period, event.date)
+        if key is not None:
+            buckets.setdefault((event.issuer_key, *key), []).append(event)
+        else:
+            passthrough.append(event)
+    deduped = list(passthrough)
+    dropped_ids: set[str] = set()
+    for group in buckets.values():
+        if len(group) == 1:
+            deduped.append(group[0])
+            continue
+        winner = max(
+            group,
+            key=lambda e: (
+                _STATUS_RANK.get(e.status, -1),
+                e.last_verified,
+                len(e.period),
+                e.id,
+            ),
+        )
+        deduped.append(winner)
+        for item in group:
+            if item.id != winner.id:
+                dropped_ids.add(item.id)
+    return sorted(deduped, key=lambda item: (item.date, item.id)), dropped_ids
+
+
 def reconcile(
     existing: tuple[Event, ...] | list[Event],
     observed: tuple[Event, ...] | list[Event],
@@ -397,6 +429,19 @@ def reconcile(
                     reason=retime_reason(old, incoming),
                 )
             )
+    final_events, dropped_ids = _dedupe_same_day_non_earnings(list(resolved.values()))
+    if dropped_ids:
+        diff.added = [c for c in diff.added if c.event.id not in dropped_ids]
+        diff.moved = [c for c in diff.moved if c.event.id not in dropped_ids]
+        diff.promoted = [c for c in diff.promoted if c.event.id not in dropped_ids]
+        diff.retimed = [c for c in diff.retimed if c.event.id not in dropped_ids]
+        diff.held = [c for c in diff.held if c.event.id not in dropped_ids]
+        already_removed = {c.event.id for c in diff.removed}
+        for dropped_id in sorted(dropped_ids):
+            if dropped_id in old_by_id and dropped_id not in already_removed:
+                diff.removed.append(
+                    Change(event=old_by_id[dropped_id], reason="deduplicated same-day alias")
+                )
     diff.held = [
         Change(
             event=resolved.get(change.event.id, change.event),
@@ -406,4 +451,4 @@ def reconcile(
         )
         for change in diff.held
     ]
-    return (sorted(resolved.values(), key=lambda item: (item.date, item.id)), diff)
+    return (final_events, diff)

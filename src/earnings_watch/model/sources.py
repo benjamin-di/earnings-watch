@@ -43,7 +43,7 @@ class Source(BaseModel):
     calendar_timezone: str | None = None
     calendar_timezone_basis: str | None = None
     sec_cik: int | None = Field(default=None, ge=1, le=9999999999)
-    hkex_stock_id: str | None = Field(default=None, pattern=r"^[0-9]{1,8}$")
+    hkex_stock_id: str | None = Field(default=None, pattern=r"^[0-9]{1,12}$")
     lei: str | None = Field(default=None, pattern=r"^[A-Z0-9]{18}[0-9]{2}$")
 
     @model_validator(mode="after")
@@ -215,9 +215,10 @@ def _canonical_non_earnings_period(raw: str, event_type: EventType, event_date) 
     value = re.sub("[^a-z0-9]+", " ", raw.lower()).strip()
     year = _non_earnings_year(raw, event_date)
     if event_type == EventType.AGM:
+        agm_year = event_date.year if event_date is not None else year
         if re.search("\\b(?:egm|extraordinary)\\b", value):
-            return f"{year}-egm"
-        return str(year)
+            return f"{agm_year}-egm"
+        return str(agm_year)
     if event_type == EventType.CMD:
         return str(year)
     if event_type == EventType.CONFERENCE:
@@ -598,6 +599,36 @@ def period_consistent(raw: str, source: Source, period: str) -> bool:
     if first_half and (not (second_half or full_year)):
         return n == 2
     return n == 4 and (full_year or second_half)
+
+
+_NON_EARNINGS_DEDUPE_TYPES = frozenset({"dividend", "agm", "cmd", "conference", "trading-update"})
+
+
+def same_day_dedupe_key(
+    event_type: str | EventType, period: str, event_date: object
+) -> tuple[str, str, str] | None:
+    """Return a deduplication bucket for same-day non-earnings aliases, preserving distinct subtypes."""
+    kind = event_type.value if isinstance(event_type, EventType) else str(event_type)
+    if kind not in _NON_EARNINGS_DEDUPE_TYPES:
+        return None
+    day = str(event_date)
+    lowered = f"-{period.lower()}-"
+    if kind == "agm":
+        subtype = "egm" if period.lower().endswith("-egm") else "agm"
+        return (kind, day, subtype)
+    if kind == "dividend":
+        div_class = "special" if "-special-" in lowered else "regular"
+        milestone = (
+            "ex"
+            if "-ex-" in lowered
+            else "record"
+            if "-record-" in lowered
+            else "pay"
+            if "-pay-" in lowered
+            else ""
+        )
+        return (kind, day, f"{div_class}:{milestone}")
+    return (kind, day, "")
 
 
 def event_id(event_type: EventType, ticker: str, period: str) -> str:

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.9.0] - 2026-11-27
+
+### Added
+
+- Add a lightweight ASX MarkitDigital public announcements discovery adapter (`providers/asx.py`, `providers/definitions/asx.toml`) for `XASX` issuers, converting announcement timestamps in `Australia/Sydney` and adding `markitdigital.com` to `_SHARED_PLATFORM_SUFFIXES`.
+- Preserve `[Est.]` cadence projections when a sweep extraction fails, using both existing history and Layer 1 `historical_dates`, while persisting allowlist-sanitized `error_detail` and preserving `last_ok`/`last_agent_audit` in `fetch_state`.
+
+### Fixed
+
+- Align the plain-fetch extraction prompt with all supported corporate milestones (`earnings`, `earnings-call`, `agm`, `cmd`, `dividend`, `conference`, `trading-update`).
+- Canonicalize AGM periods to the meeting date's calendar year, deduplicate same-day non-earnings aliases in `reconcile()` while preserving distinct subtypes (AGM vs EGM, regular vs special dividends, and `ex`/`record`/`pay` milestones), and remove superseded same-day duplicates in `Catalogue.commit_issuer()` even on non-authoritative sweeps.
+- Widen `Source.hkex_stock_id` validation to 1–12 digits for 10-digit HKEX IPO stock IDs.
+- Enable Q4 Inc discovery on `websearch` `/events-and-presentations` issuer IR URLs without `default.aspx` and short-circuit non-Q4 hosts when `Event.svc` does not return a `GetEventListResult` list.
+- Suppress unverified `timing_candidate` rejections on past events (`date < today`) and clear stale single-source row-disagreement `timing_issue` flags on clean `ir-confirmed` re-verification.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.8.1, 0.8.0, and 0.7.0; no schema change.
+
 ## [0.8.1] - 2026-11-27
 
 ### Fixed

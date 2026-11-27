@@ -730,12 +730,13 @@ def verify_claims(
                 else None
             )
             if verified is None:
-                rejected.append(
-                    RejectedClaim(
-                        claim=claim,
-                        reason=f"timing candidate is not verified by its primary document: {candidate.source_url}",
+                if claim.date >= today:
+                    rejected.append(
+                        RejectedClaim(
+                            claim=claim,
+                            reason=f"timing candidate is not verified by its primary document: {candidate.source_url}",
+                        )
                     )
-                )
                 continue
             verified_candidates.append(verified)
         verified_candidates = merge_timing_disputes(claim.date, verified_candidates)

@@ -293,13 +293,23 @@ def merge_observation(old: Event, incoming: Event) -> Event:
             old.date, old.timing_disputes, incoming.timing_disputes
         ),
     }
+    cleared_stale_issue = False
     if (
         old.timing_issue
-        and old.timing_issue.startswith(UNCONFIRMED_PUBLICATION)
+        and (
+            old.timing_issue.startswith(UNCONFIRMED_PUBLICATION)
+            or (
+                old.timing_issue == "Current source rows disagree; review required"
+                and old.source_url == incoming.source_url
+                and not incoming.timing_disputes
+                and all(d.source_url == incoming.source_url for d in old.timing_disputes)
+            )
+        )
         and (incoming.status == EventStatus.IR_CONFIRMED)
         and (not incoming.timing_issue)
     ):
         updates.update(timing_issue=None, timing_disputes=[])
+        cleared_stale_issue = True
     if incoming.timing and incoming.timing.withdrawn and (old_kind == new_kind):
         if not old.timing or incoming.timing.source_url == old.timing.source_url:
             return base.model_copy(
@@ -364,7 +374,8 @@ def merge_observation(old: Event, incoming: Event) -> Event:
     else:
         updates.update(release_time=None, release_tz=None, timing=incoming.timing or old.timing)
     if (
-        old.timing_issue
+        not cleared_stale_issue
+        and old.timing_issue
         and old.timing_disputes
         and (not old.release_time)
         and (not explicit_correction(incoming))

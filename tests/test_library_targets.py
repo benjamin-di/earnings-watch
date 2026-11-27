@@ -65,7 +65,7 @@ def test_source_hkex_stock_id_and_lei_validation():
     assert default_src.hkex_stock_id is None
     assert default_src.lei is None
 
-    for bad_hkex in ("", "123456789", "ABC", "12-34"):
+    for bad_hkex in ("", "1234567890123", "ABC", "12-34"):
         with pytest.raises(ValidationError):
             Source.model_validate(default_src.model_dump() | {"hkex_stock_id": bad_hkex})
 

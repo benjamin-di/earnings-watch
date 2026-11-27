@@ -363,7 +363,24 @@ class Catalogue(LibraryReader):
                     "INSERT INTO event_revisions(event_id,rev,change,doc,run_id,at) VALUES(?,?,?,?,?,?)",
                     (event.id, rev, change, encode(doc), run_id, now()),
                 )
-            to_remove = missing if authoritative else expired_expected
+            from earnings_watch.model.sources import same_day_dedupe_key
+
+            kept_non_earnings = {
+                key
+                for event in events
+                if (key := same_day_dedupe_key(event.type, event.period, event.date)) is not None
+            }
+            superseded_same_day: set[str] = set()
+            for old_id in missing:
+                old_doc = json.loads(old[old_id]["doc"])
+                old_key = same_day_dedupe_key(
+                    old_doc.get("type", ""),
+                    str(old_doc.get("period", "")),
+                    old[old_id]["date"],
+                )
+                if old_key is not None and old_key in kept_non_earnings:
+                    superseded_same_day.add(old_id)
+            to_remove = missing if authoritative else (expired_expected | superseded_same_day)
             for event_id in to_remove:
                 row = old[event_id]
                 db.execute(

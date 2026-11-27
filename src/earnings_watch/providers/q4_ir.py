@@ -62,11 +62,29 @@ def _strip_html(raw: str) -> str:
     return parser.text()
 
 
+_EXCHANGE_HOSTS = frozenset(
+    {
+        "www.sec.gov",
+        "data.sec.gov",
+        "www1.hkexnews.hk",
+        "www.hkexnews.hk",
+        "www.asx.com.au",
+        "asx.api.markitdigital.com",
+    }
+)
+
+
 def is_q4_source(source: Source, page_text: str = "") -> bool:
-    """Detect Q4 Inc investor relations sites from URL or rendered page text."""
-    return "default.aspx" in source.calendar_url.lower() or (
-        "powered by q4 inc" in page_text.lower()
-    )
+    """Detect Q4 Inc investor relations sites from URL, rendered page text, or Q4 events path."""
+    url_lower = source.calendar_url.lower()
+    host = (urlsplit(source.calendar_url).hostname or "").lower()
+    if not host or host in _EXCHANGE_HOSTS:
+        return False
+    if "default.aspx" in url_lower or "powered by q4 inc" in page_text.lower():
+        return True
+    if str(source.fetch) == "websearch" and "/events-and-presentations" in url_lower:
+        return True
+    return False
 
 
 def _parse_q4_datetime(raw: str | None) -> tuple[date, str | None, str | None] | None:
@@ -191,9 +209,12 @@ async def discover_q4(
         }
     )
     upcoming_payload = await _fetch_json(transport, upcoming_url)
-    if upcoming_payload:
+    upcoming_items = (
+        upcoming_payload.get("GetEventListResult") if isinstance(upcoming_payload, dict) else None
+    )
+    if isinstance(upcoming_items, list):
         upcoming_lines: list[str] = []
-        for item in upcoming_payload.get("GetEventListResult") or []:
+        for item in upcoming_items:
             if not isinstance(item, dict):
                 continue
             formatted = _format_event_line(item)
@@ -206,7 +227,42 @@ async def discover_q4(
         if upcoming_lines:
             documents[upcoming_url] = "\n".join(upcoming_lines)
 
-    for year in (today.year, today.year - 1):
+    if not isinstance(upcoming_items, list):
+        # Probe current year past events once; if neither returns a Q4 EventList array, stop.
+        probe_url = f"{base}/feed/Event.svc/GetEventList?" + urlencode(
+            {
+                "LanguageId": 1,
+                "eventSelection": 0,
+                "includeTags": "true",
+                "year": today.year,
+                "pageSize": 100,
+                "pageNumber": 0,
+                "sortOperator": 1,
+                "pressReleaseDateFilter": 3,
+            }
+        )
+        probe_payload = await _fetch_json(transport, probe_url)
+        probe_items = (
+            probe_payload.get("GetEventListResult") if isinstance(probe_payload, dict) else None
+        )
+        if not isinstance(probe_items, list):
+            return {}, []
+        for item in probe_items:
+            if not isinstance(item, dict):
+                continue
+            title = " ".join(html.unescape(str(item.get("Title") or "")).split())
+            parsed = _parse_q4_datetime(item.get("StartDate"))
+            if parsed is None:
+                continue
+            event_date, _, _ = parsed
+            tags = " ".join(str(t) for t in (item.get("TagsList") or []))
+            if event_date < today and _EARNINGS_EVENT_RE.search(f"{title} {tags}"):
+                historical.add(event_date)
+        past_years: tuple[int, ...] = (today.year - 1,)
+    else:
+        past_years = (today.year, today.year - 1)
+
+    for year in past_years:
         past_url = f"{base}/feed/Event.svc/GetEventList?" + urlencode(
             {
                 "LanguageId": 1,

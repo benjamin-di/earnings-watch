@@ -57,7 +57,7 @@ class Settings(BaseModel):
     downloads_root: Path | None = None
     cache_max_mb: int = Field(default=512, ge=1)
     provider_allowlist: list[str] = Field(
-        default_factory=lambda: ["generic_ir", "sec_edgar", "hkexnews"]
+        default_factory=lambda: ["generic_ir", "sec_edgar", "hkexnews", "asx"]
     )
 
     @field_validator("smtp_tls")

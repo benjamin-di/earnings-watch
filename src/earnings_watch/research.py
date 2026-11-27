@@ -15,7 +15,13 @@ from .model.events import ExtractResult, RejectedClaim
 from .model.urls import apex_domain
 
 OFFICIAL_EXCHANGE_HOSTS = frozenset(
-    {"www.sec.gov", "data.sec.gov", "www1.hkexnews.hk", "www.asx.com.au"}
+    {
+        "www.sec.gov",
+        "data.sec.gov",
+        "www1.hkexnews.hk",
+        "www.asx.com.au",
+        "asx.api.markitdigital.com",
+    }
 )
 
 _IR_ANALYST_SYSTEM = (

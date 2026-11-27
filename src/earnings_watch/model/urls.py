@@ -65,6 +65,7 @@ _SHARED_PLATFORM_SUFFIXES = frozenset(
         "hkexnews.hk",
         "sec.gov",
         "asx.com.au",
+        "markitdigital.com",
         "netlify.app",
         "vercel.app",
         "pages.dev",

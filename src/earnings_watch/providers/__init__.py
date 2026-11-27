@@ -3,7 +3,7 @@
 import tomllib
 from importlib.resources import files
 
-NAMES = frozenset({"generic_ir", "sec_edgar", "hkexnews"})
+NAMES = frozenset({"generic_ir", "sec_edgar", "hkexnews", "asx"})
 
 
 def definitions():
