@@ -1521,9 +1521,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 except Exception:
                     back_view = ""
             back_href = (
-                f"/?view={back_view}"
-                if back_view in _VIEWS and back_view != "upcoming"
-                else "/"
+                f"/?view={back_view}" if back_view in _VIEWS and back_view != "upcoming" else "/"
             )
             return _hub_html(
                 hub_page(

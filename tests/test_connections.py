@@ -148,9 +148,7 @@ async def test_chunked_import_limit_and_spoofed_browser_identity(seeded):
             transport=httpx.ASGITransport(app=app), base_url="http://localhost"
         ) as client,
     ):
-        assert (
-            await client.get("/", headers={"X-Fleet-Subject": "alice"})
-        ).status_code == 303
+        assert (await client.get("/", headers={"X-Fleet-Subject": "alice"})).status_code == 303
         client.cookies.set(auth.cookie, "a" * 43)
 
         async def big():
