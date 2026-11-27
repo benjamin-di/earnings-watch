@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.3] - 2026-11-27
+
+### Fixed
+
+- Skip direct `IdentityDirectory` construction inside `notify.prepare()` when `directory_key_env` is unset in role-separated `worker` and `notifier` containers that share a config with `directory_url` set while intentionally withholding the directory API key; keep direct directory enforcement whenever the key is configured or a `directory` instance is passed.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.6.2, 0.6.1, 0.6.0, 0.5.3, 0.5.2, 0.5.1, 0.5.0, 0.4.4, 0.4.3, 0.4.2, 0.4.1, 0.4.0, and 0.3.3; no schema change.
+
+[0.6.3]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.6.3
+
 ## [0.6.2] - 2026-11-27
 
 ### Security

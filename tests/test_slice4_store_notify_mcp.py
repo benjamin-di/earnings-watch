@@ -187,6 +187,27 @@ async def test_prepare_enforces_portfolio_admitted_and_skips_disabled_users(seed
     }
 
 
+def test_prepare_skips_directory_when_key_env_absent_in_non_server_roles(seeded, monkeypatch):
+    """Role-separated worker/notifier containers share config with directory_url set
+    but intentionally omit directory_key_env; prepare() must not crash there."""
+    PersonalStore(seeded.db, "alice").watch("ALPHA", "XNAS")
+    _put_doc(seeded, "alpha-rel", event_id=event().id, role="release")
+    monkeypatch.delenv("EW_TEST_MISSING_DIR_KEY", raising=False)
+    role_settings = seeded.model_copy(
+        update={
+            "directory_url": "https://directory.example/earnings-directory",
+            "directory_key_env": "EW_TEST_MISSING_DIR_KEY",
+        }
+    )
+    prepare(role_settings)
+    with connect(role_settings.db) as db:
+        rows = {
+            (r["person"], r["key"])
+            for r in db.execute("SELECT person, key FROM deliveries WHERE state='pending'")
+        }
+    assert ("alice", f"results:{event().id}:initial") in rows
+
+
 def test_legacy_reconcile_writes_baseline_key_metadata_and_uses_issuer_key(settings, tmp_path):
     directory = tmp_path / "snapshot"
     directory.mkdir()

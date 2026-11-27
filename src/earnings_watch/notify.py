@@ -439,11 +439,11 @@ def _resolve_directory_person(directory, identifier: str) -> dict:
 
 def prepare(settings, directory=None) -> None:
     if directory is None and settings.directory_url:
-        from .transport import IdentityDirectory
+        key = os.environ.get(settings.directory_key_env, "").strip()
+        if key:
+            from .transport import IdentityDirectory
 
-        directory = IdentityDirectory(
-            settings.directory_url, os.environ.get(settings.directory_key_env, "")
-        )
+            directory = IdentityDirectory(settings.directory_url, key)
     for person in people(settings.db):
         identifier = person["id"]
         if legacy_blocked(settings.db, identifier):
