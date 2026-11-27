@@ -105,7 +105,14 @@ async def _sec(
         accession = recent["accessionNumber"][i]
         if accession in seen or date.fromisoformat(recent["filingDate"][i]) < since:
             continue
-        items = {item.strip() for item in recent.get("items", [""] * (i + 1))[i].split(",")}
+        raw_items_list = recent.get("items") or []
+        raw_items = raw_items_list[i] if i < len(raw_items_list) else ""
+        if isinstance(raw_items, list):
+            items = {str(item).strip() for item in raw_items if str(item).strip()}
+        elif isinstance(raw_items, str):
+            items = {item.strip() for item in raw_items.split(",") if item.strip()}
+        else:
+            items = set()
         description = recent.get("primaryDocDescription", [""] * (i + 1))[i]
         if (
             form == "8-K"

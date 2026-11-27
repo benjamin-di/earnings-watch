@@ -10,7 +10,7 @@ from .llm.runner import AgentTask
 from .model.events import ExtractResult
 
 
-async def events(source, runner, *, model=None):
+async def events(source, runner, *, model=None, sec_contact: str = ""):
     hosts = {
         urlsplit(url).hostname
         for url in (source.calendar_url, source.results_url, source.announcements_url)
@@ -20,7 +20,13 @@ async def events(source, runner, *, model=None):
         folder = Path(directory)
         config = folder / "scope.json"
         config.write_text(
-            json.dumps({"directory": str(folder / "captures"), "hosts": sorted(hosts)})
+            json.dumps(
+                {
+                    "directory": str(folder / "captures"),
+                    "hosts": sorted(hosts),
+                    "sec_contact": sec_contact,
+                }
+            )
         )
         result = await runner.run(
             AgentTask(

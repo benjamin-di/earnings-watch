@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import hmac
@@ -22,7 +23,7 @@ from .composition import open_service
 from .errors import EarningsError
 from .http_server import AuthenticatedApp
 from .presentation import format_event_summary, format_utc_slot, group_upcoming
-from .render import render_email
+from .render import _safe_url, render_email
 from .store import accounts
 from .store.database import Catalogue, LibraryReader, PersonalStore, integrity, people
 from .transport import IdentityDirectory
@@ -134,7 +135,7 @@ def _build_company_queries(name: str, ticker: str) -> list[str]:
 async def _targets_payload(settings, directory) -> dict:
     generated_at = datetime.now(timezone.utc).isoformat()
     result_people: list[dict] = []
-    for person_row in people(settings.db):
+    for person_row in await asyncio.to_thread(people, settings.db):
         subject = person_row["id"]
         if directory is not None:
             info = await directory.resolve(subject)
@@ -143,12 +144,14 @@ async def _targets_payload(settings, directory) -> dict:
             email = str(info.get("email") or "")
             portfolio_admitted = bool(info.get("portfolio_admitted") is True)
         else:
-            email = accounts.remembered_email(settings.db, subject)
+            email = await asyncio.to_thread(accounts.remembered_email, settings.db, subject)
             portfolio_admitted = False
-        prof = accounts.profile(settings.db, subject)
+        prof = await asyncio.to_thread(accounts.profile, settings.db, subject)
         prefs = prof["settings"]
-        follows = PersonalStore(settings.db, subject).follows()
-        muted = accounts.mutes(settings.db, subject)
+        follows = await asyncio.to_thread(lambda: PersonalStore(settings.db, subject).follows())
+        if directory is None:
+            portfolio_admitted = any(r["origin"].startswith("holdings:") for r in follows)
+        muted = await asyncio.to_thread(accounts.mutes, settings.db, subject)
         news_mutes = set(prefs.get("news_mutes") or [])
         by_pair: dict[tuple[str, str], dict] = {}
         for row in follows:
@@ -223,7 +226,7 @@ async def _library_targets_payload(settings, directory) -> dict:
 
     active_source_keys: set[str] = set()
     scopes: list[dict] = []
-    for person_row in people(settings.db):
+    for person_row in await asyncio.to_thread(people, settings.db):
         subject = person_row["id"]
         if directory is not None:
             info = await directory.resolve(subject)
@@ -232,7 +235,9 @@ async def _library_targets_payload(settings, directory) -> dict:
             portfolio_admitted = bool(info.get("portfolio_admitted") is True)
         else:
             portfolio_admitted = False
-        follows = PersonalStore(settings.db, subject).follows()
+        follows = await asyncio.to_thread(lambda: PersonalStore(settings.db, subject).follows())
+        if directory is None:
+            portfolio_admitted = any(r["origin"].startswith("holdings:") for r in follows)
         person_keys: set[str] = set()
         for row in follows:
             if row["origin"].startswith("holdings:") and not portfolio_admitted:
@@ -393,11 +398,12 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
     def _render_event_card(event_row: dict, changed: set[str], *, show_holdings: bool) -> str:
         doc_links = "".join(
             '<a href="'
-            + html.escape(d["url"], quote=True)
+            + html.escape(safe_doc_url, quote=True)
             + '" rel="noreferrer">'
             + html.escape(d.get("title") or d["role"])
             + "</a>"
             for d in event_row.get("documents", [])
+            if (safe_doc_url := _safe_url(str(d.get("url") or "")))
         )
         changed_html = (
             '<span class="pill pill-accent" data-badge="changed">Changed</span>'
@@ -419,6 +425,12 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             f'<span class="pill">{html.escape("Holding" if w == "holding" else "Watchlist")}</span>'
             for w in why
         )
+        safe_source_url = _safe_url(str(event_row.get("source_url") or ""))
+        source_link = (
+            f'<a href="{html.escape(safe_source_url, quote=True)}" rel="noreferrer">Source</a>'
+            if safe_source_url
+            else ""
+        )
         return (
             '<li class="event-card"><div class="event-main">'
             '<div class="event-head">'
@@ -432,7 +444,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             f"{origin_badges}"
             "</div></div>"
             '<div class="event-links">'
-            f'<a href="{html.escape(event_row["source_url"], quote=True)}" rel="noreferrer">Source</a>'
+            f"{source_link}"
             f"{doc_links}"
             "</div></li>"
         )
@@ -1258,7 +1270,14 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     )
                 return RedirectResponse("/connections/", 303)
             elif action == "unwatch":
-                PersonalStore(settings.db, person).unwatch(ticker, exchange, revision=revision)
+                PersonalStore(settings.db, person).unwatch(
+                    ticker,
+                    exchange,
+                    revision=revision,
+                    include_holdings=(
+                        directory is None or bool(info.get("portfolio_admitted") is True)
+                    ),
+                )
                 json_extra = {"message": f"Removed {ticker} from watchlist."}
             elif action in ("mute", "unmute"):
                 is_muting = action == "mute"
@@ -1392,6 +1411,20 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 )
             return RedirectResponse(redirect_url, 303)
         except (EarningsError, ValueError, KeyError) as exc:
+            if isinstance(exc, EarningsError) and exc.code == "unauthorized":
+                if wants_json:
+                    return JSONResponse(
+                        {"ok": False, "error": str(exc)},
+                        status_code=403,
+                        headers={"Cache-Control": "no-store"},
+                    )
+                return _hub_html(
+                    hub_page(
+                        "Access unavailable",
+                        '<article class="panel"><p>' + html.escape(str(exc)) + "</p></article>",
+                    ),
+                    403,
+                )
             if wants_json:
                 return JSONResponse(
                     {"ok": False, "error": str(exc)},
@@ -1481,7 +1514,9 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         return JSONResponse(payload, status_code=200, headers={"Cache-Control": "no-store"})
 
     async def calendar_feed(request):
-        person = accounts.feed_person(settings.db, request.path_params["token"])
+        person = await asyncio.to_thread(
+            accounts.feed_person, settings.db, request.path_params["token"]
+        )
         if not person:
             return Response(status_code=404)
         try:
@@ -1493,7 +1528,11 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 include_holdings = bool(who.get("portfolio_admitted") is True)
             elif settings.directory_required:
                 return Response(status_code=503)
-            content = open_service(settings, person).calendar_ics(include_holdings=include_holdings)
+            content = await asyncio.to_thread(
+                lambda: open_service(settings, person).calendar_ics(
+                    include_holdings=include_holdings
+                )
+            )
             return Response(
                 content,
                 media_type="text/calendar; charset=utf-8",
@@ -1509,7 +1548,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
 
     async def health(request):
         try:
-            result = integrity(settings.db)
+            result = await asyncio.to_thread(integrity, settings.db)
             return JSONResponse({"integrity": result}, 200 if result == "ok" else 503)
         except Exception:
             return JSONResponse({"error": "unavailable"}, 503)

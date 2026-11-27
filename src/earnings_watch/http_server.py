@@ -1,6 +1,7 @@
 """HTTP authentication chooses personal state; library reads stay shared."""
 
 from __future__ import annotations
+import asyncio
 import hashlib
 import hmac
 import os
@@ -9,7 +10,8 @@ from urllib.parse import urlsplit
 from starlette.responses import JSONResponse
 from . import diagnostics
 from .build_identity import BUILD
-from .mcp_server import create, person_context
+from .errors import EarningsError
+from .mcp_server import create, person_context, portfolio_admitted_context
 from .settings import Settings
 from .store.database import people, token_hash, LibraryReader
 
@@ -79,12 +81,13 @@ class AuthenticatedApp:
         token = bearer[7:] if bearer.startswith("Bearer ") else ""
         path = scope.get("path", "")
         person = None
+        portfolio_admitted = True
         monitor_path = False
         if self.mode == "standalone":
             match = re.fullmatch(r"/users/([a-z0-9][a-z0-9_-]{0,63})/mcp/?", path)
             if match and len(token) >= 32:
                 candidate = match.group(1)
-                expected = token_hash(self.settings.db, candidate)
+                expected = await asyncio.to_thread(token_hash, self.settings.db, candidate)
                 if expected and hmac.compare_digest(
                     expected, hashlib.sha256(token.encode()).hexdigest()
                 ):
@@ -99,23 +102,33 @@ class AuthenticatedApp:
             candidate = headers.get(b"x-fleet-person", b"").decode("latin-1")
             if valid and self.directory is not None and path.rstrip("/") == "/mcp":
                 subject = headers.get(b"x-fleet-subject", b"").decode("latin-1")
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,199}", subject):
+                    return await JSONResponse({"error": "unauthorized"}, 401)(scope, receive, send)
                 try:
                     info = await self.directory.resolve(subject)
                     if info["admitted"] and not info["disabled"]:
+                        portfolio_admitted = bool(info.get("portfolio_admitted") is True)
                         from .store.accounts import provision
 
-                        person = provision(self.settings.db, subject, candidate)
+                        person = await asyncio.to_thread(
+                            provision, self.settings.db, subject, candidate
+                        )
+                except EarningsError as exc:
+                    if exc.code == "unauthorized":
+                        return await JSONResponse({"error": "unauthorized"}, 401)(
+                            scope, receive, send
+                        )
+                    return await JSONResponse({"error": "identity directory unavailable"}, 503)(
+                        scope, receive, send
+                    )
                 except Exception:
                     return await JSONResponse({"error": "identity directory unavailable"}, 503)(
                         scope, receive, send
                     )
-            elif (
-                valid
-                and not self.settings.directory_required
-                and candidate in {p["id"] for p in people(self.settings.db)}
-                and path.rstrip("/") == "/mcp"
-            ):
-                person = candidate
+            elif valid and not self.settings.directory_required and path.rstrip("/") == "/mcp":
+                known = await asyncio.to_thread(people, self.settings.db)
+                if candidate in {p["id"] for p in known}:
+                    person = candidate
         if person is None and not monitor_path:
             return await JSONResponse({"error": "unauthorized"}, 401)(scope, receive, send)
         received = 0
@@ -139,7 +152,9 @@ class AuthenticatedApp:
             return await self.monitoring(rewritten, bounded_receive, send)
         assert person is not None
         identity = person_context.set(person)
+        admitted_token = portfolio_admitted_context.set(portfolio_admitted)
         try:
             await self.app(rewritten, bounded_receive, send)
         finally:
+            portfolio_admitted_context.reset(admitted_token)
             person_context.reset(identity)

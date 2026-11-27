@@ -229,7 +229,9 @@ def with_legacy_evidence(event: Event) -> Event:
     if event.type == EventType.EARNINGS and call_only(event.evidence) and (not event.release_time):
         return event.model_copy(
             update={
-                "status": EventStatus.EXPECTED,
+                "status": EventStatus.EXPECTED
+                if event.status != EventStatus.PAST
+                else event.status,
                 "time_hint": None,
                 "timing_issue": CALL_ONLY_RESULTS,
             }

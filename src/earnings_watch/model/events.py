@@ -3,7 +3,6 @@ import re
 from datetime import date as Date
 from datetime import datetime
 from enum import StrEnum
-from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -195,13 +194,10 @@ class ResultsLink(BaseModel):
     @field_validator("url")
     @classmethod
     def _https(cls, value: str) -> str:
+        from earnings_watch.model.urls import public_url
+
         value = value.strip()
-        if not value.startswith("https://"):
-            raise ValueError("results link must be https")
-        if any((ch.isspace() or ord(ch) < 32 for ch in value)):
-            raise ValueError("results link must not contain whitespace")
-        if not urlsplit(value).hostname:
-            raise ValueError("results link must have a host")
+        public_url(value)
         return value
 
 
@@ -240,6 +236,15 @@ class Event(ReleaseTimeMixin):
             ):
                 raise ValueError("event clock must match its reviewed timing resolution")
         return self
+
+    @field_validator("source_url")
+    @classmethod
+    def _valid_source_url(cls, value: str) -> str:
+        from earnings_watch.model.urls import public_url
+
+        value = value.strip()
+        public_url(value)
+        return value
 
     @field_validator("id")
     @classmethod

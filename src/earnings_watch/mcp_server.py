@@ -21,6 +21,9 @@ from .settings import Settings
 person_context: contextvars.ContextVar[str] = contextvars.ContextVar(
     "earnings_person", default="local"
 )
+portfolio_admitted_context: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "earnings_portfolio_admitted", default=True
+)
 MAX_RESPONSE = 128 * 1024
 _NULL_BRANCH = {"type": "null"}
 
@@ -96,7 +99,11 @@ def create(settings: Settings) -> FastMCP:
     )
 
     def service():
-        return open_service(settings, person_context.get())
+        return open_service(
+            settings,
+            person_context.get(),
+            include_holdings=portfolio_admitted_context.get(),
+        )
 
     def envelope(function):
         @wraps(function)

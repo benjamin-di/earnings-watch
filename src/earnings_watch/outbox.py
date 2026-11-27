@@ -56,15 +56,15 @@ def delivery_lock(path, person):
         os.close(fd)
 
 
-async def deliver(path, person: str, notifier: Notifier) -> dict:
+async def deliver(path, person: str, notifier: Notifier, *, include_holdings: bool = True) -> dict:
     try:
         with delivery_lock(path, person):
-            return await _deliver(path, person, notifier)
+            return await _deliver(path, person, notifier, include_holdings=include_holdings)
     except BlockingIOError:
         return {"sent": [], "unknown": [], "blocked": "delivery already running"}
 
 
-async def _deliver(path, person: str, notifier: Notifier) -> dict:
+async def _deliver(path, person: str, notifier: Notifier, *, include_holdings: bool = True) -> dict:
     import json
 
     with connect(path) as db:
@@ -87,7 +87,7 @@ async def _deliver(path, person: str, notifier: Notifier) -> dict:
             if current is None:
                 continue
             row = dict(current)
-            if not _eligible(db, person, row):
+            if not _eligible(db, person, row, include_holdings=include_holdings):
                 continue
         ready = getattr(notifier, "ready", None)
         if ready is not None:
@@ -104,7 +104,7 @@ async def _deliver(path, person: str, notifier: Notifier) -> dict:
             if current is None:
                 continue
             row = dict(current)
-            if not _eligible(db, person, row):
+            if not _eligible(db, person, row, include_holdings=include_holdings):
                 continue
             claimed = db.execute(
                 "UPDATE deliveries SET state='unknown',attempts=attempts+1 WHERE person=? AND key=? AND state='pending'",
@@ -219,21 +219,23 @@ def _reconcile(path, person: str, key: str, receipt: dict) -> dict:
     return {"outcome": receipt["outcome"]}
 
 
-def _eligible(db, person, row):
+def _eligible(db, person, row, *, include_holdings: bool = True):
     import json
 
     if row["kind"] in {"results", "brief", "weekly_brief", "urgent"}:
         pref = json.loads(
             db.execute("SELECT settings FROM profiles WHERE person=?", (person,)).fetchone()[0]
         )
+        holdings_clause = "" if include_holdings else " AND f.origin NOT LIKE 'holdings:%'"
         keys = {
             r[0]
             for r in db.execute(
-                "SELECT source_key FROM follows f WHERE person=? AND NOT EXISTS (SELECT 1 FROM mutes m WHERE m.person=f.person AND m.ticker=f.ticker AND (m.exchange='' OR m.exchange=f.exchange))",
+                f"SELECT source_key FROM follows f WHERE person=?{holdings_clause} AND NOT EXISTS (SELECT 1 FROM mutes m WHERE m.person=f.person AND m.ticker=f.ticker AND (m.exchange='' OR m.exchange=f.exchange))",
                 (person,),
             )
         }
         payload = json.loads(row["payload"])
+        mutated = False
         if row["kind"] in {"brief", "weekly_brief"}:
             payload["events"] = [e for e in payload.get("events", []) if e["issuer_key"] in keys]
             payload["changes"] = [
@@ -243,10 +245,20 @@ def _eligible(db, person, row):
                 d
                 for d in payload.get("documents", [])
                 if db.execute(
-                    "SELECT 1 FROM events WHERE id=? AND source_key IN (SELECT source_key FROM follows f WHERE person=? AND NOT EXISTS (SELECT 1 FROM mutes m WHERE m.person=f.person AND m.ticker=f.ticker AND (m.exchange='' OR m.exchange=f.exchange)))",
+                    f"SELECT 1 FROM events WHERE id=? AND source_key IN (SELECT source_key FROM follows f WHERE person=?{holdings_clause} AND NOT EXISTS (SELECT 1 FROM mutes m WHERE m.person=f.person AND m.ticker=f.ticker AND (m.exchange='' OR m.exchange=f.exchange)))",
                     (d["event_id"], person),
                 ).fetchone()
             ]
+            mutated = True
+        if not include_holdings:
+            if payload.get("has_holdings"):
+                payload["has_holdings"] = False
+                mutated = True
+            for ev in (payload.get("event"), *payload.get("events", [])):
+                if isinstance(ev, dict) and "holding" in (ev.get("why_followed") or []):
+                    ev["why_followed"] = [w for w in ev["why_followed"] if w != "holding"]
+                    mutated = True
+        if mutated:
             row["payload"] = encode(payload)
             db.execute(
                 "UPDATE deliveries SET payload=? WHERE person=? AND key=? AND state='pending'",

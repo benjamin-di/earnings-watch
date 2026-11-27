@@ -12,17 +12,34 @@ from .store.database import LibraryReader, PersonalStore, database_id
 from .store.accounts import effective_follows
 
 
+_DOC_ROLE_ALIASES: dict[str, str] = {
+    "press-release": "release",
+    "financial-statements": "statements",
+}
+
+
 class PersonService:
-    def __init__(self, library: LibraryReader, person: PersonalStore, signing_key: bytes):
+    def __init__(
+        self,
+        library: LibraryReader,
+        person: PersonalStore,
+        signing_key: bytes,
+        *,
+        include_holdings: bool = True,
+    ):
         self.library, self.person, self.signing_key = library, person, signing_key
+        self.include_holdings = include_holdings
+
+    def _effective_include_holdings(self, include_holdings: bool | None) -> bool:
+        return self.include_holdings if include_holdings is None else include_holdings
 
     def _events(
-        self, scope: str = "following", *, include_holdings: bool = True
+        self, scope: str = "following", *, include_holdings: bool | None = None
     ) -> list[dict[str, Any]]:
         if scope not in {"following", "all"}:
             raise EarningsError("invalid_argument", "scope must be following or all")
         follows = effective_follows(self.person.path, self.person.person)
-        if not include_holdings:
+        if not self._effective_include_holdings(include_holdings):
             follows = [row for row in follows if not row["origin"].startswith("holdings:")]
         keys = {row["source_key"] for row in follows}
         return [row for row in self.library.events() if scope == "all" or row["issuer_key"] in keys]
@@ -36,14 +53,15 @@ class PersonService:
         cursor: str | None = None,
         scope: str = "following",
         *,
-        include_holdings: bool = True,
+        include_holdings: bool | None = None,
     ) -> dict[str, Any]:
         if not 1 <= days <= 90 or not 1 <= limit <= 100 or (tickers and len(tickers) > 20):
             raise EarningsError("invalid_argument", "days, tickers or limit exceeds its budget")
+        effective_holdings = self._effective_include_holdings(include_holdings)
         today = datetime.now(timezone.utc).date()
         rows = [
             row
-            for row in self._events(scope, include_holdings=include_holdings)
+            for row in self._events(scope, include_holdings=effective_holdings)
             if str(today) <= row["date"] <= str(today + timedelta(days=days))
             and (not tickers or row["ticker"] in tickers)
             and (not types or row["type"] in types)
@@ -72,6 +90,9 @@ class PersonService:
         selected = [
             present(e, self.person, self.library, sources_by_key=sources_by_key) for e in selected
         ]
+        if not effective_holdings:
+            for row in selected:
+                row["why_followed"] = [w for w in row.get("why_followed", []) if w != "holding"]
         # The compact view stays within the MCP response budget.
         fields = {
             "id",
@@ -108,16 +129,17 @@ class PersonService:
         limit: int = 100,
         scope: str = "following",
         *,
-        include_holdings: bool = True,
+        include_holdings: bool | None = None,
     ) -> dict[str, Any]:
         if not 1 <= days <= 90 or not 1 <= limit <= 100 or (tickers and len(tickers) > 20):
             raise EarningsError("invalid_argument", "days, tickers or limit exceeds its budget")
+        effective_holdings = self._effective_include_holdings(include_holdings)
         today = datetime.now(timezone.utc).date()
         lower = str(today - timedelta(days=days))
         upper = str(today)
         rows = [
             row
-            for row in self._events(scope, include_holdings=include_holdings)
+            for row in self._events(scope, include_holdings=effective_holdings)
             if lower <= row["date"] < upper
             and (not tickers or row["ticker"] in tickers)
             and (not types or row["type"] in types)
@@ -130,6 +152,9 @@ class PersonService:
         selected = [
             present(e, self.person, self.library, sources_by_key=sources_by_key) for e in selected
         ]
+        if not effective_holdings:
+            for row in selected:
+                row["why_followed"] = [w for w in row.get("why_followed", []) if w != "holding"]
         fields = {
             "id",
             "issuer_key",
@@ -175,24 +200,38 @@ class PersonService:
         since: str | None = None,
         limit: int = 100,
         scope: str = "following",
+        *,
+        include_holdings: bool | None = None,
     ) -> dict[str, Any]:
         if not 1 <= limit <= 100 or len(event_ids or []) > 20 or len(tickers or []) > 20:
             raise EarningsError("invalid_argument", "document query exceeds its budget")
-        events = {row["id"]: row for row in self._events(scope)}
+        effective_holdings = self._effective_include_holdings(include_holdings)
+        events = {
+            row["id"]: row for row in self._events(scope, include_holdings=effective_holdings)
+        }
         if event_ids:
             events = {row["id"]: row for row in self.library.events() if row["id"] in event_ids}
+        normalized_roles = {_DOC_ROLE_ALIASES.get(role, role) for role in roles} if roles else None
         docs = [
             row
             for row in self.library.documents()
             if row["event_id"] in events
             and (not tickers or events[row["event_id"]]["ticker"] in tickers)
-            and (not roles or row["role"] in roles)
+            and (
+                not normalized_roles
+                or _DOC_ROLE_ALIASES.get(row["role"], row["role"]) in normalized_roles
+            )
             and (not since or row["first_seen"] >= since)
         ]
         return {"documents": docs[:limit], "truncated": len(docs) > limit, **self._freshness()}
 
     def changes(
-        self, cursor: str | None = None, limit: int = 100, *, after_seq: int = 0
+        self,
+        cursor: str | None = None,
+        limit: int = 100,
+        *,
+        after_seq: int = 0,
+        include_holdings: bool | None = None,
     ) -> dict[str, Any]:
         try:
             identity = database_id(self.person.path)
@@ -208,15 +247,21 @@ class PersonService:
         if seq < 0 or not 1 <= limit <= 100:
             raise EarningsError("invalid_argument", "invalid change query")
         rows = self.library.changes(seq, limit)
-        keys = {r["source_key"] for r in effective_follows(self.person.path, self.person.person)}
+        follows = effective_follows(self.person.path, self.person.person)
+        if not self._effective_include_holdings(include_holdings):
+            follows = [r for r in follows if not r["origin"].startswith("holdings:")]
+        keys = {r["source_key"] for r in follows}
         return {
             "changes": [r for r in rows if r["doc"].get("issuer_key") in keys],
             "cursor": identity + ":" + str(rows[-1]["seq"] if rows else seq),
             **self._freshness(),
         }
 
-    def watchlist(self) -> dict[str, Any]:
-        return {"follows": self.person.follows()}
+    def watchlist(self, *, include_holdings: bool | None = None) -> dict[str, Any]:
+        follows = self.person.follows()
+        if not self._effective_include_holdings(include_holdings):
+            follows = [r for r in follows if not r["origin"].startswith("holdings:")]
+        return {"follows": follows}
 
     def watch(
         self,
@@ -230,10 +275,15 @@ class PersonService:
         return self.person.watch(ticker, exchange or "", isin=isin, name=name, ir_url=ir_url)
 
     def unwatch(self, ticker: str, exchange: str | None = None) -> dict[str, Any]:
-        return self.person.unwatch(ticker, exchange or "")
+        return self.person.unwatch(ticker, exchange, include_holdings=self.include_holdings)
 
     def calendar_plan(
-        self, sink: str = "delegated", full: bool = False, event_ids: list[str] | None = None
+        self,
+        sink: str = "delegated",
+        full: bool = False,
+        event_ids: list[str] | None = None,
+        *,
+        include_holdings: bool | None = None,
     ) -> dict[str, Any]:
         return calendar.plan(
             self.person,
@@ -241,13 +291,16 @@ class PersonService:
             sink=sink,
             full=full,
             event_ids=event_ids,
+            include_holdings=self._effective_include_holdings(include_holdings),
         )
 
     def calendar_ack(self, handle: str, results: list[dict[str, Any]]) -> dict[str, Any]:
         return calendar.ack(self.person, handle, results, key=self.signing_key)
 
-    def calendar_ics(self, *, include_holdings: bool = True) -> str:
-        return ics.render(self._events(include_holdings=include_holdings))
+    def calendar_ics(self, *, include_holdings: bool | None = None) -> str:
+        return ics.render(
+            self._events(include_holdings=self._effective_include_holdings(include_holdings))
+        )
 
     def status(self) -> dict[str, Any]:
         return self.library.status() | self._freshness()

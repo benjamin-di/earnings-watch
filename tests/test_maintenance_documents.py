@@ -229,22 +229,24 @@ async def test_authoritative_sweep_drains_more_than_three_removals_across_sweeps
     open(seeded).watch("ALPHA")
     catalogue = Catalogue(seeded.db)
     base = date.today() + timedelta(days=30)
-    # Seed 4 events already marked removal-held so an authoritative empty extraction drops all 4.
+    # Seed 4 events with explicit removal overrides so an authoritative empty extraction drops all 4.
     held_events = [
         event(
             period=f"2026Q{n}",
             id=f"earnings:alpha:2026Q{n}",
             date=base + timedelta(days=n),
-            history=[
-                {
-                    "at": "2026-10-01T00:00:00+00:00",
-                    "action": "removal-held",
-                }
-            ],
         )
         for n in range(1, 5)
     ]
     catalogue.commit_issuer("alpha", held_events, run_id="seed-held")
+    from earnings_watch.store.database import connect
+
+    with connect(seeded.db, write=True) as db:
+        for ev in held_events:
+            db.execute(
+                "INSERT INTO overrides(event_id, kind, doc) VALUES(?, ?, ?)",
+                (ev.id, "remove", '{"reason": "confirmed removal"}'),
+            )
     runner = AsyncMock()
 
     async def run_task(task, **kwargs):

@@ -390,7 +390,7 @@ def _match_earnings_period(raw: str, source: Source) -> str | None:
             return f"{year}H{elapsed // 6}" if elapsed in {6, 12} else None
         return f"{year}{('FQ' if source.period_scheme == PeriodScheme.FISCAL_Q else 'Q')}{elapsed // 3}"
     match = _AS_AT_RE.search(raw)
-    if match and source.fy_end_month != 12:
+    if match:
         month = {"march": 3, "june": 6, "september": 9, "december": 12}[
             match.group("month").lower()
         ]
@@ -403,23 +403,6 @@ def _match_earnings_period(raw: str, source: Source) -> str | None:
         if source.period_scheme == PeriodScheme.HALF_YEAR:
             return f"{year}H{elapsed // 6}" if elapsed in {6, 12} else None
         return f"{year}{('FQ' if source.period_scheme == PeriodScheme.FISCAL_Q else 'Q')}{elapsed // 3}"
-    if match:
-        as_at_year = match.group("year")
-        as_at_month = match.group("month").lower()
-        fiscal = source.period_scheme == PeriodScheme.FISCAL_Q
-        if as_at_month == "june":
-            return f"{as_at_year}H1"
-        if as_at_month == "december":
-            suffix = {
-                PeriodScheme.CALENDAR_Q: "Q4",
-                PeriodScheme.FISCAL_Q: "FQ4",
-                PeriodScheme.HALF_YEAR: "H2",
-            }[source.period_scheme]
-            return f"{as_at_year}{suffix}"
-        if source.period_scheme == PeriodScheme.HALF_YEAR:
-            return None
-        quarter = {"march": 1, "september": 3}[as_at_month]
-        return f"{as_at_year}{('FQ' if fiscal else 'Q')}{quarter}"
     return _period_end_period(raw, source)
 
 
@@ -510,6 +493,25 @@ def _token_quarter_period(raw: str, source: Source) -> str | None:
     return f"{year}Q{quarter}"
 
 
+def _periods_equivalent(actual: str, expected: str) -> bool:
+    if actual == expected:
+        return True
+    left = _TARGET_PERIOD.match(actual)
+    right = _TARGET_PERIOD.match(expected)
+    if left is None or right is None or left.group("year") != right.group("year"):
+        return False
+    pair = {
+        (left.group("kind"), int(left.group("n"))),
+        (right.group("kind"), int(right.group("n"))),
+    }
+    return pair in (
+        {("H", 1), ("Q", 2)},
+        {("H", 1), ("FQ", 2)},
+        {("H", 2), ("Q", 4)},
+        {("H", 2), ("FQ", 4)},
+    )
+
+
 def period_consistent(raw: str, source: Source, period: str) -> bool:
     target = _TARGET_PERIOD.match(period)
     tokens = _period_tokens(raw)
@@ -519,7 +521,7 @@ def period_consistent(raw: str, source: Source, period: str) -> bool:
     if re.fullmatch("20\\d{2}", compact):
         return False
     try:
-        return canonical_period(raw, source, EventType.EARNINGS, None) == period
+        return _periods_equivalent(canonical_period(raw, source, EventType.EARNINGS, None), period)
     except ValueError:
         pass
     if not (quarters or nine or first_half or second_half or full_year):

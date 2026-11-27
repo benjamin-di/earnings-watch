@@ -76,7 +76,7 @@ def _source(**overrides) -> Source:
         ("Annual 2026", PeriodScheme.CALENDAR_Q, "2026Q4"),
         ("2026 Annual", PeriodScheme.CALENDAR_Q, "2026Q4"),
         ("interim statement as at 31 March 2026", PeriodScheme.CALENDAR_Q, "2026Q1"),
-        ("half-yearly report as at 30 June 2026", PeriodScheme.CALENDAR_Q, "2026H1"),
+        ("half-yearly report as at 30 June 2026", PeriodScheme.CALENDAR_Q, "2026Q2"),
         ("interim statement as at 30 September 2026", PeriodScheme.CALENDAR_Q, "2026Q3"),
         ("annual report as at 31 December 2026", PeriodScheme.CALENDAR_Q, "2026Q4"),
         ("Interim 2026 (six months ended June 30, 2026)", PeriodScheme.HALF_YEAR, "2026H1"),

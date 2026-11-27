@@ -132,7 +132,7 @@ def load(path: Path | None = None) -> Settings:
                 "library_targets_tokens_env",
                 "provider_allowlist",
             }:
-                values[key] = env.split(",") if env else []
+                values[key] = [item.strip() for item in env.split(",") if item.strip()]
             else:
                 values[key] = env
     news_env = os.environ.get("EARNINGS_WATCH_INTEGRATIONS_NEWS_DIGEST_ENABLED")

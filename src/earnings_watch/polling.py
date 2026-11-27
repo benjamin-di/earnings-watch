@@ -1,5 +1,6 @@
 """Persistent, bounded release polling for official providers and issuer links."""
 
+import logging
 from datetime import datetime, timedelta, timezone
 from . import release
 from .documents import verify_link
@@ -7,9 +8,13 @@ from .model.events import Event
 from .providers.generic_ir import capture
 from .store.database import digest
 
+logger = logging.getLogger(__name__)
+
 # Four days at ten-minute cadence, one at thirty minutes, two at two hours,
 # and two at one day. Cover the entire -1..+7 day window.
 MAX_POLL_ATTEMPTS = 4 * 144 + 48 + 2 * 12 + 2
+RESEARCH_COOLDOWN = timedelta(hours=6)
+MAX_RESEARCH_ATTEMPTS = 6
 
 
 def due(event, state, now):
@@ -42,7 +47,14 @@ async def poll(catalogue, source, transport, *, dry_run=False, research=None, pr
             state = {
                 k: v
                 for k, v in state.items()
-                if k not in {"attempts", "last_attempt", "researched_release"}
+                if k
+                not in {
+                    "attempts",
+                    "last_attempt",
+                    "researched_release",
+                    "last_research_attempt",
+                    "research_attempts",
+                }
             }
         state.update(
             attempts=state.get("attempts", 0) + 1,
@@ -78,25 +90,50 @@ async def poll(catalogue, source, transport, *, dry_run=False, research=None, pr
                     )
                     state["released_at"] = (signal.published_at or now).isoformat()
             if source.results_url and "generic_ir" in enabled:
-                page = await capture(transport, source.results_url)
-                for page_link in page.links:
-                    for role in ("release", "presentation", "statements"):
-                        doc = verify_link(
-                            source,
-                            row,
-                            page_link | {"role": role, "evidence": page_link["title"]},
-                            page.text,
-                        )
-                        if doc["verified"]:
-                            found.append(doc)
-                            break
+                try:
+                    page = await capture(transport, source.results_url)
+                except Exception:
+                    logger.warning(
+                        "results_url capture failed for %s (%s); falling through",
+                        source.key,
+                        event.id,
+                        exc_info=True,
+                    )
+                    page = None
+                if page is not None:
+                    for page_link in page.links:
+                        for role in ("release", "presentation", "statements"):
+                            doc = verify_link(
+                                source,
+                                row,
+                                page_link | {"role": role, "evidence": page_link["title"]},
+                                page.text,
+                            )
+                            if doc["verified"]:
+                                found.append(doc)
+                                break
+            offset = (now.date() - event.date).days
+            last_research = state.get("last_research_attempt")
+            research_ready = (
+                offset >= 0
+                and state.get("research_attempts", 0) < MAX_RESEARCH_ATTEMPTS
+                and (
+                    not last_research
+                    or now - datetime.fromisoformat(last_research) >= RESEARCH_COOLDOWN
+                )
+            )
             if (
                 not found
                 and not state.get("released_at")
                 and not state.get("researched_release")
                 and research is not None
                 and "generic_ir" in enabled
+                and research_ready
             ):
+                state["last_research_attempt"] = now.isoformat()
+                state["research_attempts"] = state.get("research_attempts", 0) + 1
+                if not dry_run:
+                    catalogue.set_state("release_watch", event.id, state)
                 researched = await research(source, row)
                 found.extend(researched)
                 if any(doc.get("verified") and doc.get("role") == "release" for doc in researched):

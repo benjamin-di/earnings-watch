@@ -95,17 +95,27 @@ def test_verified_absence_removes_at_or_below_threshold() -> None:
     assert [change.event.id for change in diff.removed] == [old.id]
 
 
-def test_mass_removal_circuit_holds_then_later_confirmation_clears() -> None:
+def test_mass_removal_circuit_holds_until_override_confirms() -> None:
     existing = [_event(f"earnings:{ticker}:2026Q3") for ticker in ("AAA", "BBB", "CCC")]
     held, first_diff = _reconcile(existing, [], authoritative_sources={"alpha"})
     assert len(held) == 3
     assert len(first_diff.held) == 3
     assert not first_diff.removed
-    cleared, second_diff = _reconcile(
+    still_held, second_diff = _reconcile(
         held, [], authoritative_sources={"alpha"}, now=NOW + timedelta(seconds=1)
     )
+    assert len(still_held) == 3
+    assert not second_diff.removed
+    assert not second_diff.held
+    cleared, third_diff = _reconcile(
+        still_held,
+        [],
+        authoritative_sources={"alpha"},
+        removal_overrides={e.id for e in existing},
+        now=NOW + timedelta(seconds=2),
+    )
     assert cleared == []
-    assert len(second_diff.removed) == 3
+    assert len(third_diff.removed) == 3
 
 
 def test_always_membership_is_never_removed() -> None:

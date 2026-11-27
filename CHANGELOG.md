@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.6.2] - 2026-11-27
+
+### Security
+
+- Enforce `portfolio_admitted` consistently across `/mcp`, `PersonService`, `calendar.plan()`, `PersonService.unwatch()`, `/connections/unwatch`, `notify.prepare()`, `outbox.deliver()`, and CLI `notify` so revoked or unadmitted accounts cannot read, probe, mute, or receive emails for `holdings:*` follows.
+- Sanitize event and document `<a href>` links in Connections UI with `_safe_url()` and validate `Event.source_url` / `ResultsLink.url` via `public_url()` (also rejecting empty userinfo and multicast IP literals/DNS responses).
+- Add `"purpose"` domain separation to signed `calendar.plan` and `interests.preview` HMAC handles, validate/normalize and cap `accounts.mute()` rows, and return `401`/`403` (instead of `503`/`409`) for invalid subjects and revoked accounts while reserving `503` for upstream directory failures.
+- Disable keep-alive connection pooling across redirect hops in `Transport.request()` and reset `User-Agent` per hop so cross-host CDN redirects perform fresh TLS hostname verification and never leak `sec_contact`.
+
+### Fixed
+
+- Handle `list[str]` as well as comma-separated `str` for SEC EDGAR `filings.recent.items`, and forward `sec_contact` across CLI downloads, registration, URL healing, and research `scope.json`.
+- Throttle `polling.py` LLM research fallback (`offset >= 0`, 6-hour cooldown, attempt cap) and isolate `results_url` fetch failures; fix `CliRunner` `"result": null` handling and repair tool preservation; fix `worker.sweep_due()` so post-midnight retries do not skip the next daily `23:10 UTC` sweep.
+- Anchor `evidence_verifies()` on alphanumeric boundaries, support optional commas and US/non-US slash dates in `dates_in_evidence()`, wire `check_timing_candidates()` into `Maintenance.sweep()`, require explicit `removal_overrides` for `MAX_AUTO_REMOVALS` holds, fix `period_consistent()` `H1`/`H2` <-> `Q2`/`Q4` equivalence, `_AS_AT_RE` day/quarter parsing, `with_legacy_evidence()` `PAST` preservation, `timing_search.py` `UTC±N`/`GMT±N` offset rejection, and `results_from_calls` retention.
+- Persist canonical `sources.exchange` in `sync_holdings()`, propagate `(ticker, exchange)` updates per-row in `Catalogue.put_source()`, fix `PersonalStore.unwatch(..., exchange="")` wildcard deletion, align `legacy.reconcile()` / `notify.event_notices()` baseline keys, use a 24-hour UTC follow-up window in `notify.notices()`, map `DocRoleLiteral` aliases in `PersonService.documents()`, normalize exchanges in `interests._match_sources()`, strip whitespace in `settings.load()` list env vars, and offload blocking SQLite calls in async HTTP/Connections handlers.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.6.1, 0.6.0, 0.5.3, 0.5.2, 0.5.1, 0.5.0, 0.4.4, 0.4.3, 0.4.2, 0.4.1, 0.4.0, and 0.3.3; no schema change.
+
+[0.6.2]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.6.2
+
 ## [0.6.1] - 2026-11-27
 
 ### Fixed

@@ -13,7 +13,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..errors import EarningsError
-from ..symbols import is_valid_exchange, is_valid_ticker
+from ..symbols import is_valid_exchange, is_valid_ticker, normalize_exchange
 from .database import connect, encode, now, check_revision
 
 DEFAULTS: dict[str, Any] = {
@@ -33,6 +33,7 @@ DEFAULTS: dict[str, Any] = {
 _NEWS_CADENCES = frozenset({"twice_daily", "slot_a", "slot_b"})
 _NEWS_SCOPES = frozenset({"both", "holdings", "watchlist"})
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+MAX_MUTES = 200
 MAX_NEWS_MUTES = 200
 
 
@@ -165,14 +166,30 @@ def mute(
     *,
     revision: int | None = None,
 ) -> None:
+    norm_ticker = ticker.strip().upper()
+    norm_exchange = normalize_exchange(exchange)
+    if not is_valid_ticker(norm_ticker) or (
+        norm_exchange != "" and not is_valid_exchange(norm_exchange)
+    ):
+        raise EarningsError("invalid_argument", "invalid mute ticker or exchange")
     with connect(path, write=True) as db:
         check_revision(db, person, revision)
         if enabled:
-            db.execute("INSERT OR IGNORE INTO mutes VALUES(?,?,?)", (person, ticker, exchange))
+            exists = db.execute(
+                "SELECT 1 FROM mutes WHERE person=? AND ticker=? AND exchange=?",
+                (person, norm_ticker, norm_exchange),
+            ).fetchone()
+            if not exists:
+                count = db.execute(
+                    "SELECT count(*) FROM mutes WHERE person=?", (person,)
+                ).fetchone()[0]
+                if count >= MAX_MUTES:
+                    raise EarningsError("over_cap", "Mute limit reached.")
+                db.execute("INSERT INTO mutes VALUES(?,?,?)", (person, norm_ticker, norm_exchange))
         else:
             db.execute(
                 "DELETE FROM mutes WHERE person=? AND ticker=? AND exchange=?",
-                (person, ticker, exchange),
+                (person, norm_ticker, norm_exchange),
             )
         db.execute("UPDATE profiles SET revision=revision+1 WHERE person=?", (person,))
 

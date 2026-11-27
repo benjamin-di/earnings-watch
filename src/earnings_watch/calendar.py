@@ -56,6 +56,7 @@ def plan(
     sink: str = "delegated",
     full: bool = False,
     event_ids: list[str] | None = None,
+    include_holdings: bool = True,
 ) -> dict[str, Any]:
     if legacy_blocked(person.path, person.person):
         raise EarningsError("temporarily_unavailable", "legacy calendar reconciliation required")
@@ -68,7 +69,16 @@ def plan(
     snapshot = person.calendar_snapshot(sink, event_ids=event_ids)
     rev, ledger = snapshot["ledger_rev"], snapshot["ledger"]
     previous = {row["key"]: row for row in ledger}
-    entries = {row["key"]: row for row in desired(snapshot["events"])}
+    events = snapshot["events"]
+    if not include_holdings:
+        follows = person.follows()
+        non_holding_keys = {
+            row["source_key"]
+            for row in follows
+            if row.get("source_key") and not row["origin"].startswith("holdings:")
+        }
+        events = [ev for ev in events if ev.get("issuer_key") in non_holding_keys]
+    entries = {row["key"]: row for row in desired(events)}
     ops = []
     for identifier, entry in entries.items():
         old = previous.get(identifier)
@@ -89,6 +99,7 @@ def plan(
     scope = sorted(op["key"].removeprefix("earnings-watch:") for op in ops)
     sequences = snapshot["event_sequences"]
     payload = {
+        "purpose": "calendar_plan",
         "person": person.person,
         "sink": sink,
         "ledger_rev": rev,
@@ -114,8 +125,13 @@ def ack(
         if not hmac.compare_digest(signature, expected):
             raise ValueError("signature")
         payload = json.loads(base64.urlsafe_b64decode(data))
-        if payload["person"] != person.person or payload["exp"] < time.time():
-            raise ValueError("identity or expiry")
+        if (
+            not isinstance(payload, dict)
+            or payload.get("purpose") != "calendar_plan"
+            or payload["person"] != person.person
+            or payload["exp"] < time.time()
+        ):
+            raise ValueError("identity, purpose or expiry")
     except (ValueError, KeyError, TypeError):
         raise EarningsError("plan_stale", "invalid or expired calendar handle") from None
     return person.acknowledge(payload, results, hashlib.sha256(handle.encode()).hexdigest())

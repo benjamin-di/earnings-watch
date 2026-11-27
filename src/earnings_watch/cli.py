@@ -410,6 +410,13 @@ def execute(args, settings):
 
             return {"notices": notices(settings, args.person)}
         notifier: Notifier = StdoutNotifier()
+        directory = (
+            IdentityDirectory(
+                settings.directory_url, os.environ.get(settings.directory_key_env, "")
+            )
+            if settings.directory_url
+            else None
+        )
         if args.channel == "webhook":
             if not args.url:
                 raise EarningsError("invalid_argument", "webhook requires --url")
@@ -418,13 +425,6 @@ def execute(args, settings):
             url = public_url(args.url)
             notifier = WebhookNotifier(url, Transport({urlsplit(url).hostname or ""}))
         elif args.channel == "smtp":
-            directory = (
-                IdentityDirectory(
-                    settings.directory_url, os.environ.get(settings.directory_key_env, "")
-                )
-                if settings.directory_url
-                else None
-            )
             if settings.directory_required and directory is None:
                 raise EarningsError(
                     "invalid_argument", "identity directory is required for SMTP notifications"
@@ -446,17 +446,32 @@ def execute(args, settings):
                 directory=directory,
             )
         with maintenance_lock(settings):
-            prepare(settings)
+            prepare(settings, directory=directory)
+
+            async def deliver_one(person_id: str) -> dict:
+                include_holdings = True
+                if directory is not None:
+                    try:
+                        info = await directory.resolve(person_id)
+                    except Exception:
+                        return {"sent": [], "unknown": [], "blocked": "directory unavailable"}
+                    if not info.get("admitted") or info.get("disabled"):
+                        return {"sent": [], "unknown": [], "blocked": "not admitted"}
+                    include_holdings = bool(info.get("portfolio_admitted") is True)
+                return await deliver(
+                    settings.db, person_id, notifier, include_holdings=include_holdings
+                )
+
             if args.all_people:
 
                 async def deliver_all():
                     results = {}
                     for entry in people(settings.db):
-                        results[entry["id"]] = await deliver(settings.db, entry["id"], notifier)
+                        results[entry["id"]] = await deliver_one(entry["id"])
                     return {"people": results}
 
                 return asyncio.run(deliver_all())
-            return asyncio.run(deliver(settings.db, args.person, notifier))
+            return asyncio.run(deliver_one(args.person))
     service = open_service(settings, args.person)
     if command == "upcoming":
         return (
@@ -494,7 +509,7 @@ def execute(args, settings):
             from .transport import Transport
 
             hosts = {urlsplit(d["url"]).hostname for d in rows["documents"]}
-            transport = Transport({h for h in hosts if h})
+            transport = Transport({h for h in hosts if h}, sec_contact=settings.sec_contact)
 
             async def downloads():
                 return [

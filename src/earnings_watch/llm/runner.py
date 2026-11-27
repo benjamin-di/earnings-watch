@@ -480,7 +480,7 @@ class CliRunner:
             if backend == "claude-code":
                 envelope = json.loads(stdout)
                 value = envelope.get("structured_output") or json.loads(
-                    envelope.get("result", "{}")
+                    envelope.get("result") or "{}"
                 )
             else:
                 value = json.loads((scratch / "answer.json").read_text())
@@ -499,10 +499,9 @@ class CliRunner:
                     raise
                 repair = replace(
                     task,
-                    kind="json",
                     prompt=task.prompt
                     + "\nReturn valid JSON matching the schema exactly; the previous output was invalid.",
                 )
-                result = await self._one(backend, repair)
+                result = await self._one(backend, repair, research_config)
                 return AgentResult(result.parsed, result.backend, repaired=True)
         raise NotStarted("no configured model backend can start")

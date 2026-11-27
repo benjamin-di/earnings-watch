@@ -21,7 +21,7 @@ def create(config: dict):
     directory = Path(config["directory"])
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     hosts = set(config["hosts"])
-    transport = Transport(hosts, daily_budget=20)
+    transport = Transport(hosts, daily_budget=20, sec_contact=config.get("sec_contact", ""))
     observations: list[dict[str, str]] = []
 
     @server.tool(annotations={"readOnlyHint": True, "openWorldHint": True})

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 from email.message import EmailMessage
 from email.utils import make_msgid
 import json
@@ -151,6 +152,12 @@ def _parse_timestamp(value: str) -> datetime:
     return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _utc(value: datetime | None = None) -> datetime:
+    if value is None:
+        return datetime.now(timezone.utc)
+    return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
 def timing_signature(event):
     return tuple(
         event.get(k) for k in ("date", "release_time", "release_tz", "timing_issue", "status")
@@ -183,7 +190,8 @@ def notices(
     settings, person: str, at: datetime | None = None, *, include_holdings: bool = True
 ) -> list[tuple[str, str, dict]]:
     """Preview is nonmutating. Unknown submissions never generate replacement effects."""
-    at = at or datetime.now(timezone.utc)
+    at = _utc(at)
+    at_iso = at.isoformat()
     pref = profile(settings.db, person)
     zone = ZoneInfo(pref["timezone"])
     local = at.astimezone(zone)
@@ -243,9 +251,7 @@ def notices(
         weekly_revisions = (
             [
                 dict(r) | {"doc": json.loads(r["doc"])}
-                for r in db.execute(
-                    "SELECT * FROM event_revisions WHERE at>? ORDER BY seq", (weekly_cutoff,)
-                )
+                for r in db.execute("SELECT * FROM event_revisions ORDER BY seq")
             ]
             if pref["settings"]["weekly_brief"]
             else []
@@ -277,42 +283,57 @@ def notices(
                             (
                                 key,
                                 "results",
-                                {"event": event, "documents": docs, "day": str(today)}
+                                {
+                                    "event": event,
+                                    "documents": docs,
+                                    "day": str(today),
+                                    "sent_at": at_iso,
+                                }
                                 | common_meta,
                             )
                         )
                     continue
                 initial = json.loads(previous["payload"])
                 old_ids = {d["id"] for d in initial["documents"]}
-                if initial["day"] != str(today) or not any(d["id"] not in old_ids for d in docs):
+                if not any(d["id"] not in old_ids for d in docs):
+                    continue
+                initial_sent_at = initial.get("sent_at")
+                if initial_sent_at:
+                    if at - _parse_timestamp(initial_sent_at) > timedelta(hours=24):
+                        continue
+                elif initial.get("day") != str(today):
                     continue
                 key = "results:" + event["id"] + ":followup"
             result.append(
                 (
                     key,
                     "results",
-                    {"event": event, "documents": docs, "day": str(today)} | common_meta,
+                    {"event": event, "documents": docs, "day": str(today), "sent_at": at_iso}
+                    | common_meta,
                 )
             )
-    changes = [r for r in all_changes if r["doc"].get("issuer_key") in keys and r["at"] > cutoff]
+    changes = [
+        r
+        for r in all_changes
+        if r["doc"].get("issuer_key") in keys and _parse_timestamp(r["at"]) > cutoff_at
+    ]
     if pref["settings"]["urgent"]:
         # Brief submission must never consume changes still in urgent coalescing.
+        urgent_since = max(cutoff_at, at - timedelta(hours=72))
         with connect(settings.db) as db:
-            identifiers = [
-                r[0]
-                for r in db.execute(
-                    "SELECT DISTINCT event_id FROM event_revisions WHERE at>?",
-                    (max(cutoff, (at - timedelta(hours=72)).isoformat()),),
+            identifiers = list(
+                dict.fromkeys(
+                    r["event_id"]
+                    for r in db.execute("SELECT event_id, at FROM event_revisions")
+                    if _parse_timestamp(r["at"]) > urgent_since
                 )
-            ]
+            )
             transitions = [urgent_transition(db, identifier) for identifier in identifiers]
         for change in transitions:
-            if (
-                change is None
-                or change["doc"].get("issuer_key") not in keys
-                or change["at"] <= cutoff
-                or (at - datetime.fromisoformat(change["at"])).total_seconds() < 600
-            ):
+            if change is None or change["doc"].get("issuer_key") not in keys:
+                continue
+            changed_at = _parse_timestamp(change["at"])
+            if changed_at <= cutoff_at or (at - changed_at).total_seconds() < 600:
                 continue
             old, current = change["previous"], change["doc"]
             if old.get("status") != "ir-confirmed" or (
@@ -407,12 +428,36 @@ def notices(
     ]
 
 
-def prepare(settings) -> None:
+def _resolve_directory_person(directory, identifier: str) -> dict:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(directory.resolve(identifier))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, directory.resolve(identifier)).result()
+
+
+def prepare(settings, directory=None) -> None:
+    if directory is None and settings.directory_url:
+        from .transport import IdentityDirectory
+
+        directory = IdentityDirectory(
+            settings.directory_url, os.environ.get(settings.directory_key_env, "")
+        )
     for person in people(settings.db):
         identifier = person["id"]
         if legacy_blocked(settings.db, identifier):
             continue
-        for key, kind, payload in notices(settings, identifier):
+        include_holdings = True
+        if directory is not None:
+            try:
+                info = _resolve_directory_person(directory, identifier)
+            except Exception:
+                continue
+            if not info.get("admitted") or info.get("disabled"):
+                continue
+            include_holdings = bool(info.get("portfolio_admitted") is True)
+        for key, kind, payload in notices(settings, identifier, include_holdings=include_holdings):
             if kind in {"brief", "weekly_brief"}:
                 with connect(settings.db, write=True) as db:
                     db.execute(
@@ -422,9 +467,14 @@ def prepare(settings) -> None:
             enqueue(settings.db, identifier, key, kind, payload)
 
 
-def event_notices(events, documents, today):
+def event_notices(events, documents, today, *, at: datetime | None = None):
     """Legacy adoption baseline only; never schedules new reminder effects."""
+    sent_at = _utc(at).isoformat()
     for e in events:
         docs = [d for d in documents if d["event_id"] == e["id"] and d["verified"]]
         if docs:
-            yield "documents:" + digest([e["id"], docs]), "results", {"event": e, "documents": docs}
+            yield (
+                "results:" + e["id"] + ":initial",
+                "results",
+                {"event": e, "documents": docs, "day": str(today), "sent_at": sent_at},
+            )

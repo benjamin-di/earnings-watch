@@ -129,7 +129,7 @@ async def download(
     return path
 
 
-async def research(source, event, runner, *, model=None):
+async def research(source, event, runner, *, model=None, sec_contact: str = ""):
     """Verify proposed document links against independently recorded tool captures."""
     from pydantic import BaseModel, Field
     from .llm.runner import AgentTask
@@ -153,7 +153,13 @@ async def research(source, event, runner, *, model=None):
         folder = Path(directory)
         config = folder / "scope.json"
         config.write_text(
-            json.dumps({"directory": str(folder / "captures"), "hosts": sorted(hosts)})
+            json.dumps(
+                {
+                    "directory": str(folder / "captures"),
+                    "hosts": sorted(hosts),
+                    "sec_contact": sec_contact,
+                }
+            )
         )
         result = await runner.run(
             AgentTask(

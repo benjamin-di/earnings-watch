@@ -4,7 +4,13 @@ import re
 from zoneinfo import ZoneInfo
 from earnings_watch.model.events import ExtractClaim, EventType
 from earnings_watch.model.sources import Source
-from .verify import CALL_WORD_RE, evidence_verifies, normalize_whitespace, _time_matches
+from .verify import (
+    CALL_WORD_RE,
+    _time_matches,
+    _uses_us_dates,
+    evidence_verifies,
+    normalize_whitespace,
+)
 
 _ZONE_EXPRESSION = "(?:[A-Za-z_]+/[A-Za-z_/]+|(?:Eastern|Pacific|Mountain|Central|UK|London|Lisbon|Portugal|Portuguese|Hong\\s+Kong|Astana|Kazakhstan)(?:\\s+time)?|[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?\\s+[Tt]ime|[A-Z]{2,5})"
 
@@ -19,7 +25,10 @@ def _clock_zones(claim: ExtractClaim) -> list[str] | None:
         if value != target:
             continue
         end = readings[index + 1][1][0] if index + 1 < len(readings) else len(evidence)
-        zone = re.match("\\.?\\s*[\\[(]?\\s*(" + _ZONE_EXPRESSION + ")\\b", evidence[span[1] : end])
+        zone = re.match(
+            "\\.?\\s*[\\[(]?\\s*(" + _ZONE_EXPRESSION + ")\\b(?!\\s*[+-]\\s*\\d)",
+            evidence[span[1] : end],
+        )
         if zone:
             labels.append(zone.group(1))
         if len(readings) == 1:
@@ -83,7 +92,11 @@ def _zone_supported(claim: ExtractClaim, page: str, *, seasonal: bool = True) ->
     if not claim.release_time or not claim.release_tz:
         return False
     zone = claim.release_tz
-    if zone.casefold() in page.casefold():
+    if re.search(
+        r"(?<![A-Za-z0-9_/])" + re.escape(zone) + r"(?![A-Za-z0-9_/])(?!\s*[+-]\s*\d)",
+        page,
+        re.I,
+    ):
         return True
     aliases = {
         "America/New_York": "\\b(?:ET|Eastern\\s+time)\\b",
@@ -107,14 +120,14 @@ def _zone_supported(claim: ExtractClaim, page: str, *, seasonal: bool = True) ->
         (
             name
             and (not name.startswith(("+", "-")))
-            and re.search("\\b" + re.escape(name) + "\\b", page)
+            and re.search("\\b" + re.escape(name) + "\\b(?!\\s*[+-]\\s*\\d)", page)
             for name in names
         )
     )
 
 
 def verify_announcement(claim: ExtractClaim, page: str, source: Source | None = None) -> None:
-    if not evidence_verifies(claim.date, claim.evidence, page):
+    if not evidence_verifies(claim.date, claim.evidence, page, us_dates=_uses_us_dates(source)):
         raise ValueError("timing evidence does not match the primary announcement and date")
     if claim.type == EventType.EARNINGS_CALL and (not CALL_WORD_RE.search(claim.evidence)):
         raise ValueError("the announcement does not identify an investor call")

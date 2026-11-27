@@ -265,7 +265,8 @@ def reconcile(path: Path, person: str, receipt: dict) -> dict:
         old_events = raw_events.get("events", []) if isinstance(raw_events, dict) else raw_events
         source_keys = {r["ticker"]: r["key"] for r in db.execute("SELECT ticker,key FROM sources")}
         imported_keys = {
-            "earnings-watch:" + f"{r['type']}:{source_keys[r['ticker']]}:{r['period']}"
+            "earnings-watch:"
+            + f"{r['type']}:{r.get('issuer_key') or source_keys[r['ticker']]}:{r['period']}"
             for r in old_events
             if r.get("calendar_synced")
         }
@@ -301,17 +302,23 @@ def reconcile(path: Path, person: str, receipt: dict) -> dict:
         from .notify import event_notices
 
         documents = [json.loads(r[0]) for r in db.execute("SELECT doc FROM documents ORDER BY id")]
-        today = datetime.now(timezone.utc).date()
-        for key, kind, payload in event_notices(events, documents, today):
+        reconciled_dt = datetime.now(timezone.utc)
+        reconciled_at = reconciled_dt.isoformat()
+        today = reconciled_dt.date()
+        for key, kind, payload in event_notices(events, documents, today, at=reconciled_dt):
             db.execute(
                 "INSERT OR IGNORE INTO deliveries(person,key,kind,state,payload,sent_at) VALUES(?,?,?,'sent',?,?)",
-                (person, key, kind, encode(payload), now()),
+                (person, key, kind, encode(payload), reconciled_at),
             )
+        db.execute(
+            "INSERT OR REPLACE INTO metadata VALUES(?,?)",
+            ("baseline:" + person, reconciled_at),
+        )
         db.execute(
             "UPDATE people SET notify_seq=(SELECT coalesce(max(seq),0) FROM event_revisions) WHERE id=?",
             (person,),
         )
-        original["reconciliation"] = receipt | {"at": now()}
+        original["reconciliation"] = receipt | {"at": reconciled_at}
         db.execute(
             "UPDATE deliveries SET state='sent',payload=? WHERE person=? AND key='legacy-state'",
             (encode(original), person),

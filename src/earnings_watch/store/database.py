@@ -240,26 +240,53 @@ class Catalogue(LibraryReader):
             ]
 
     def put_source(self, source: Source) -> None:
+        source_exchange = source.exchange or ""
         with connect(self.path, write=True) as db:
             db.execute(
                 "INSERT INTO sources(key,ticker,exchange,doc) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET ticker=excluded.ticker,exchange=excluded.exchange,doc=excluded.doc",
-                (source.key, source.ticker, source.exchange or "", source.model_dump_json()),
+                (source.key, source.ticker, source_exchange, source.model_dump_json()),
             )
+            registered = db.execute(
+                "SELECT id,person,ticker,exchange,origin FROM follows WHERE source_key=?",
+                (source.key,),
+            ).fetchall()
+            changed_people: set[str] = set()
+            for row in registered:
+                if row["ticker"] == source.ticker and row["exchange"] == source_exchange:
+                    continue
+                db.execute(
+                    "DELETE FROM follows WHERE source_key IS NULL AND person=? AND ticker=? AND exchange=? AND origin=?",
+                    (row["person"], source.ticker, source_exchange, row["origin"]),
+                )
+                duplicate = db.execute(
+                    "SELECT id FROM follows WHERE person=? AND ticker=? AND exchange=? AND origin=? AND id!=?",
+                    (row["person"], source.ticker, source_exchange, row["origin"], row["id"]),
+                ).fetchone()
+                if duplicate:
+                    db.execute("DELETE FROM follows WHERE id=?", (row["id"],))
+                else:
+                    db.execute(
+                        "UPDATE follows SET ticker=?, exchange=? WHERE id=?",
+                        (source.ticker, source_exchange, row["id"]),
+                    )
+                changed_people.add(row["person"])
+            for person in changed_people:
+                db.execute("UPDATE profiles SET revision=revision+1 WHERE person=?", (person,))
             pending = db.execute(
                 "SELECT id,person,origin FROM follows WHERE source_key IS NULL AND (ticker=? OR (? IS NOT NULL AND json_extract(hints,'$.isin')=?)) AND (exchange='' OR exchange=?)",
-                (source.ticker, source.isin, source.isin, source.exchange or ""),
+                (source.ticker, source.isin, source.isin, source_exchange),
             ).fetchall()
             for row in pending:
                 duplicate = db.execute(
                     "SELECT id FROM follows WHERE person=? AND ticker=? AND exchange=? AND origin=? AND id!=?",
-                    (row["person"], source.ticker, source.exchange or "", row["origin"], row["id"]),
+                    (row["person"], source.ticker, source_exchange, row["origin"], row["id"]),
                 ).fetchone()
                 if duplicate:
                     db.execute("DELETE FROM follows WHERE id=?", (row["id"],))
                 else:
                     db.execute(
                         "UPDATE follows SET source_key=?,ticker=?,exchange=?,state='registered',reason='' WHERE id=?",
-                        (source.key, source.ticker, source.exchange or "", row["id"]),
+                        (source.key, source.ticker, source_exchange, row["id"]),
                     )
                 db.execute(
                     "UPDATE profiles SET revision=revision+1 WHERE person=?", (row["person"],)
@@ -680,18 +707,44 @@ class PersonalStore:
             db.execute("UPDATE profiles SET revision=revision+1 WHERE person=?", (self.person,))
             return {"state": state, "source_key": key}
 
-    def unwatch(self, ticker: str, exchange: str = "", *, revision: int | None = None) -> Row:
-        parsed_ticker, parsed_exchange = parse_symbol(ticker, exchange)
+    def unwatch(
+        self,
+        ticker: str,
+        exchange: str | None = None,
+        *,
+        revision: int | None = None,
+        include_holdings: bool = True,
+    ) -> Row:
+        parsed_ticker, parsed_exchange = parse_symbol(ticker, "" if exchange is None else exchange)
+        wildcard = exchange is None and parsed_exchange == ""
         with connect(self.path, write=True) as db:
             check_revision(db, self.person, revision)
-            holding = db.execute(
-                "SELECT 1 FROM follows WHERE person=? AND ticker=? AND (?='' OR exchange=?) AND origin LIKE 'holdings:%'",
-                (self.person, parsed_ticker, parsed_exchange, parsed_exchange),
-            ).fetchone()
-            removed = db.execute(
-                "DELETE FROM follows WHERE person=? AND ticker=? AND (?='' OR exchange=?) AND origin='manual'",
-                (self.person, parsed_ticker, parsed_exchange, parsed_exchange),
-            ).rowcount
+            if wildcard:
+                holding = (
+                    db.execute(
+                        "SELECT 1 FROM follows WHERE person=? AND ticker=? AND origin LIKE 'holdings:%'",
+                        (self.person, parsed_ticker),
+                    ).fetchone()
+                    if include_holdings
+                    else None
+                )
+                removed = db.execute(
+                    "DELETE FROM follows WHERE person=? AND ticker=? AND origin='manual'",
+                    (self.person, parsed_ticker),
+                ).rowcount
+            else:
+                holding = (
+                    db.execute(
+                        "SELECT 1 FROM follows WHERE person=? AND ticker=? AND exchange=? AND origin LIKE 'holdings:%'",
+                        (self.person, parsed_ticker, parsed_exchange),
+                    ).fetchone()
+                    if include_holdings
+                    else None
+                )
+                removed = db.execute(
+                    "DELETE FROM follows WHERE person=? AND ticker=? AND exchange=? AND origin='manual'",
+                    (self.person, parsed_ticker, parsed_exchange),
+                ).rowcount
             # Holdings and the watchlist are separate lists: only an unwatch that
             # removed no manual follow means "stop showing this holding".
             if holding and not removed:
@@ -881,11 +934,11 @@ def sync_holdings(path: Path, person: str, feed: str, entries: list[Row]) -> Row
         ).fetchone()[0]
         if others + len(normalized) > 200:
             raise EarningsError("over_cap", "follow limit reached")
-        prepared = []
+        prepared_map: dict[tuple[str, str], tuple[str, str, str, str, str, str, str]] = {}
         for ticker, exchange in sorted(normalized):
             matches = list(
                 db.execute(
-                    "SELECT key FROM sources WHERE ticker=? AND (?='' OR exchange=?)",
+                    "SELECT key, exchange FROM sources WHERE ticker=? AND (?='' OR exchange=?)",
                     (ticker, exchange, exchange),
                 )
             )
@@ -893,7 +946,17 @@ def sync_holdings(path: Path, person: str, feed: str, entries: list[Row]) -> Row
                 raise EarningsError("ambiguous", "holdings ticker requires an exchange")
             if not matches:
                 raise EarningsError("not_found", "import sources before synchronizing holdings")
-            prepared.append((person, matches[0][0], ticker, exchange, origin, "registered", now()))
+            canonical_exchange = matches[0][1]
+            prepared_map[(ticker, canonical_exchange)] = (
+                person,
+                matches[0][0],
+                ticker,
+                canonical_exchange,
+                origin,
+                "registered",
+                now(),
+            )
+        prepared = list(prepared_map.values())
         db.execute("DELETE FROM follows WHERE person=? AND origin=?", (person, origin))
         db.executemany(
             "INSERT INTO follows(person,source_key,ticker,exchange,origin,state,added_at) VALUES(?,?,?,?,?,?,?)",

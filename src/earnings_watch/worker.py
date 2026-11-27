@@ -30,7 +30,20 @@ def sweep_due(status, now):
         return True
     if previous["exit"] != 0:
         return _retry_ready(previous, now)
-    return previous["started"][:10] != str(now.date())
+    started_raw = previous.get("started")
+    if not isinstance(started_raw, str) or not started_raw:
+        return True
+    try:
+        started = datetime.fromisoformat(started_raw)
+    except ValueError:
+        return True
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    now_utc = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+    today_window = now_utc.astimezone(timezone.utc).replace(
+        hour=23, minute=10, second=0, microsecond=0
+    )
+    return started.astimezone(timezone.utc) < today_window
 
 
 async def run(settings: Settings) -> None:

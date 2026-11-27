@@ -11,7 +11,7 @@ from typing import Iterator, Any
 from urllib.parse import urlsplit
 
 from .engine.reconcile import reconcile
-from .engine.verify import verify_claims
+from .engine.verify import check_timing_candidates, verify_claims
 from .errors import EarningsError
 from .llm.runner import AgentRunner, AgentTask, BudgetRunner, CliRunner
 from .model.events import Event, ExtractResult, TimingSelection
@@ -173,7 +173,9 @@ class Maintenance:
                     return []
                 from .documents import research
 
-                docs, _ = await research(source, event, runner, model=settings.model)
+                docs, _ = await research(
+                    source, event, runner, model=settings.model, sec_contact=settings.sec_contact
+                )
                 counts["calls"] = runner.calls
                 return docs
 
@@ -194,7 +196,10 @@ class Maintenance:
                             )
                             if researched:
                                 result, documents = await research_events(
-                                    source, runner, model=settings.model
+                                    source,
+                                    runner,
+                                    model=settings.model,
+                                    sec_contact=settings.sec_contact,
                                 )
                                 page = Capture(source.calendar_url, "")
                             else:
@@ -215,6 +220,7 @@ class Maintenance:
                                                 runner,
                                                 model=settings.model,
                                                 dry_run=dry_run,
+                                                sec_contact=settings.sec_contact,
                                             )
                                         raise
                                 if not runner.remaining:
@@ -245,7 +251,10 @@ class Maintenance:
                                     and (not extracted.complete or not extracted.page_relevant)
                                 ):
                                     extra, captures = await research_events(
-                                        source, runner, model=settings.model
+                                        source,
+                                        runner,
+                                        model=settings.model,
+                                        sec_contact=settings.sec_contact,
                                     )
                                     researched = True
                                     if extra.parsed is not None:
@@ -266,6 +275,9 @@ class Maintenance:
                                     and extracted.page_relevant
                                     and not checked.rejected
                                 )
+                                timing_checks = check_timing_candidates(
+                                    [*old, *checked.events], source, documents
+                                )
                                 merged, _ = reconcile(
                                     old,
                                     checked.events,
@@ -280,6 +292,7 @@ class Maintenance:
                                         for o in overrides
                                         if o["kind"] == "timing_selection"
                                     },
+                                    timing_candidate_checks=timing_checks,
                                     seed_mode=False,
                                     now=datetime.now(timezone.utc),
                                 )

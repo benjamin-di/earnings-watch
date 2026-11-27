@@ -168,10 +168,6 @@ def _history(
     )
 
 
-def _previously_held(event: Event, now: datetime) -> bool:
-    return any((entry.action == "removal-held" and entry.at < now for entry in event.history))
-
-
 def downgrade_ir_confirmed(
     events: tuple[Event, ...],
     issuer_keys: set[str] | frozenset[str],
@@ -217,11 +213,15 @@ def results_from_calls(
     *,
     today: date,
 ) -> tuple[Event, ...]:
-    results = {
+    observed_results = {
+        (event.issuer_key, event.period) for event in observed if event.type == EventType.EARNINGS
+    }
+    existing_results = {
         (event.issuer_key, event.period): event
-        for event in (*existing, *observed)
+        for event in existing
         if event.type == EventType.EARNINGS
     }
+    emitted: set[tuple[str, str]] = set()
     derived: list[Event] = []
     for call in observed:
         if (
@@ -230,10 +230,11 @@ def results_from_calls(
             or call.status != EventStatus.IR_CONFIRMED
         ):
             continue
-        held = results.get((call.issuer_key, call.period))
-        if held is not None and (
-            not (held.timing_issue == CALL_ONLY_RESULTS and held.date != call.date)
-        ):
+        key = (call.issuer_key, call.period)
+        if key in observed_results or key in emitted:
+            continue
+        held = existing_results.get(key)
+        if held is not None and held.timing_issue != CALL_ONLY_RESULTS:
             continue
         event = Event(
             id=event_id(EventType.EARNINGS, call.issuer_key, call.period),
@@ -249,7 +250,7 @@ def results_from_calls(
             last_verified=call.last_verified,
             timing_issue=CALL_ONLY_RESULTS,
         )
-        results[call.issuer_key, call.period] = event
+        emitted.add(key)
         derived.append(event)
     return tuple(derived)
 
@@ -300,14 +301,12 @@ def reconcile(
         else:
             merged[identifier] = old
     fresh_candidates = [
-        (event, reason)
-        for event, reason in removal_candidates
-        if event.id not in removal_overrides and (not _previously_held(event, now))
+        (event, reason) for event, reason in removal_candidates if event.id not in removal_overrides
     ]
     trip_circuit = len(fresh_candidates) > MAX_AUTO_REMOVALS
     for event, reason in removal_candidates:
         protected = event.issuer_key in always_source_keys
-        confirmed = event.id in removal_overrides or _previously_held(event, now)
+        confirmed = event.id in removal_overrides
         if protected or (trip_circuit and (not confirmed)):
             note = "membership:always" if protected else "mass-removal circuit breaker"
             history = list(event.history)

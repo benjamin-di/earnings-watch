@@ -79,8 +79,7 @@ async def test_official_document_survives_a_later_ir_page_failure(seeded, monkey
     monkeypatch.setattr("earnings_watch.release._sec", provider)
     transport = AsyncMock()
     transport.get.side_effect = ConnectionError("IR page unavailable")
-    with pytest.raises(ConnectionError):
-        await poll(catalogue, src, transport)
+    assert await poll(catalogue, src, transport) == 1
     assert catalogue.documents()[0]["url"] == link.url
     assert catalogue.state("release_watch", event().id)["seen"] == ["filing"]
 

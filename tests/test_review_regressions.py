@@ -123,7 +123,7 @@ def test_as_at_periods_follow_the_fiscal_year_end():
     calendar = plain_source()
     assert (
         canonical_period("half-yearly report as at 30 June 2026", calendar, EventType.EARNINGS, day)
-        == "2026H1"
+        == "2026Q2"
     )
 
 

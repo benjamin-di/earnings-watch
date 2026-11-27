@@ -21,12 +21,18 @@ from .store.database import (
     connect,
     now,
 )
-from .symbols import is_valid_exchange, is_valid_isin, is_valid_ticker, parse_symbol
+from .symbols import (
+    is_valid_exchange,
+    is_valid_isin,
+    is_valid_ticker,
+    normalize_exchange,
+    parse_symbol,
+)
 
 
 def _match_sources(sources, raw_value: str, raw_exchange: str):
     needle = raw_value.strip().casefold()
-    explicit_exchange = raw_exchange.strip().upper()
+    explicit_exchange = normalize_exchange(raw_exchange)
     # Check exact company-name match first so names with ':' or '.CO' are not misparsed.
     if needle:
         exact = [
@@ -129,6 +135,7 @@ def preview(settings, person: str, text: str) -> dict:
         (r["ticker"], r["exchange"]) for r in unlisted
     }
     payload: dict = dict(
+        purpose="interests_preview",
         person=person,
         revision=profile(settings.db, person)["revision"],
         exp=int(time.time()) + 900,
@@ -157,7 +164,12 @@ def apply(settings, person: str, handle: str) -> dict:
         if not hmac.compare_digest(sig, hmac.new(key, body.encode(), hashlib.sha256).hexdigest()):
             raise ValueError()
         value = json.loads(base64.urlsafe_b64decode(body))
-        if value["person"] != person or value["exp"] < time.time():
+        if (
+            not isinstance(value, dict)
+            or value.get("purpose") != "interests_preview"
+            or value["person"] != person
+            or value["exp"] < time.time()
+        ):
             raise ValueError()
     except (ValueError, KeyError):
         raise EarningsError("invalid_argument", "Import preview expired. Preview again.") from None

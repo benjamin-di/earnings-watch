@@ -33,36 +33,37 @@ logger = logging.getLogger("earnings_watch.verify")
 _DATE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile("\\b(20\\d{2}-\\d{2}-\\d{2})\\b"), "%Y-%m-%d"),
     (re.compile("\\b(\\d{1,2}\\.\\d{1,2}\\.20\\d{2})\\b"), "%d.%m.%Y"),
-    (re.compile("\\b(\\d{1,2}/\\d{1,2}/20\\d{2})\\b"), "%d/%m/%Y"),
     (
         re.compile(
-            "\\b(\\d{1,2}\\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\\s+20\\d{2})\\b",
+            "\\b(\\d{1,2}\\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)(?:,\\s*|\\s+)20\\d{2})\\b",
             re.IGNORECASE,
         ),
         "%d %B %Y",
     ),
     (
         re.compile(
-            "\\b((?:January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{1,2},\\s+20\\d{2})\\b",
+            "\\b((?:January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{1,2}(?:,\\s*|\\s+)20\\d{2})\\b",
             re.IGNORECASE,
         ),
-        "%B %d, %Y",
+        "%B %d %Y",
     ),
     (
         re.compile(
-            "\\b(\\d{1,2}\\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\\s+20\\d{2})\\b",
+            "\\b(\\d{1,2}\\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)(?:,\\s*|\\s+)20\\d{2})\\b",
             re.IGNORECASE,
         ),
         "%d %b %Y",
     ),
     (
         re.compile(
-            "\\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\\s+\\d{1,2},\\s+20\\d{2})\\b",
+            "\\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\\s+\\d{1,2}(?:,\\s*|\\s+)20\\d{2})\\b",
             re.IGNORECASE,
         ),
-        "%b %d, %Y",
+        "%b %d %Y",
     ),
 )
+_SLASH_DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(20\d{2})\b")
+_US_EXCHANGES = frozenset({"XNAS", "XNYS", "ARCX", "BATS", "XASE"})
 _MONTH_NAME = "(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)"
 _ORDINAL_DAY_RE = re.compile("\\b(\\d{1,2})(?:st|nd|rd|th)\\b", re.IGNORECASE)
 _YEARLESS_DATE_RES: tuple[re.Pattern[str], ...] = (
@@ -116,22 +117,47 @@ def _normalized_date_text(evidence: str) -> str:
     )
 
 
-def dates_in_evidence(evidence: str) -> set[date]:
+def _uses_us_dates(source: Source | None) -> bool:
+    return bool(source is not None and source.exchange in _US_EXCHANGES)
+
+
+def dates_in_evidence(evidence: str, *, us_dates: bool = False) -> set[date]:
     found: set[date] = set()
     normalized = _normalized_date_text(evidence)
     for pattern, date_format in _DATE_PATTERNS:
         for match in pattern.finditer(normalized):
             raw = re.sub("\\bSept\\b", "Sep", match.group(1), flags=re.I)
+            raw = re.sub(r",\s*", " ", raw)
             try:
                 parsed = datetime.strptime(raw, date_format).replace(tzinfo=timezone.utc)
                 found.add(parsed.date())
             except ValueError:
                 continue
+    for match in _SLASH_DATE_RE.finditer(normalized):
+        first, second, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        if first > 12 and second <= 12:
+            month, day = second, first
+        elif second > 12 and first <= 12:
+            month, day = first, second
+        elif us_dates:
+            month, day = first, second
+        else:
+            day, month = first, second
+        try:
+            found.add(date(year, month, day))
+        except ValueError:
+            continue
     return found
 
 
 def _loose(value: str) -> str:
     return " ".join(re.sub("[^0-9A-Za-z]+", " ", value).split())
+
+
+def _contains_anchored(needle: str, haystack: str) -> bool:
+    return bool(
+        needle and re.search(r"(?<![0-9A-Za-z])" + re.escape(needle) + r"(?![0-9A-Za-z])", haystack)
+    )
 
 
 _MARKDOWN_LINK_RE = re.compile('\\[([^\\]\\n]*)\\]\\([^)\\s]*(?:\\s+"[^"]*")?\\)')
@@ -141,24 +167,27 @@ def _visible_text(page_text: str) -> str:
     return _MARKDOWN_LINK_RE.sub("\\1", page_text)
 
 
-def evidence_verifies(event_date: date, evidence: str, page_text: str) -> bool:
+def evidence_verifies(
+    event_date: date, evidence: str, page_text: str, *, us_dates: bool = False
+) -> bool:
     normalized_evidence = normalize_whitespace(evidence)
     if not normalized_evidence:
         return False
-    if normalized_evidence not in normalize_whitespace(
-        page_text
-    ) and normalized_evidence not in normalize_whitespace(_visible_text(page_text)):
+    visible = _visible_text(page_text)
+    if not _contains_anchored(
+        normalized_evidence, normalize_whitespace(page_text)
+    ) and not _contains_anchored(normalized_evidence, normalize_whitespace(visible)):
         loose_evidence = _loose(evidence)
-        if not loose_evidence or loose_evidence not in _loose(_visible_text(page_text)):
+        if not _contains_anchored(loose_evidence, _loose(visible)):
             return False
-    if event_date in dates_in_evidence(normalized_evidence):
+    if event_date in dates_in_evidence(normalized_evidence, us_dates=us_dates):
         return True
     return _yearless_dates_match(event_date, normalized_evidence)
 
 
-def evidence_has_full_date(event_date: date, evidence: str) -> bool:
+def evidence_has_full_date(event_date: date, evidence: str, *, us_dates: bool = False) -> bool:
     """Whether the quote states the claimed date including its year."""
-    return event_date in dates_in_evidence(evidence)
+    return event_date in dates_in_evidence(evidence, us_dates=us_dates)
 
 
 def period_date_plausible(period: str, event_date: date, fy_end_month: int) -> bool:
@@ -394,7 +423,9 @@ def _verified_candidate(
             "timing_conflict": False,
         }
     )
-    if not evidence_verifies(candidate.date, candidate.evidence, document_text):
+    if not evidence_verifies(
+        candidate.date, candidate.evidence, document_text, us_dates=_uses_us_dates(source)
+    ):
         return None
     verified_time, verified_tz = verified_release_time(candidate)
     if not verified_time or not verified_tz:
@@ -470,7 +501,9 @@ def _calendar_candidates(claim: ExtractClaim, source: Source, documents: dict[st
         ):
             title = match.group("title")
             period = re.search("\\b(?:H[12]|Q[1-4]|FY|[369]M)\\s*20\\d{2}\\b", title, re.I)
-            if not period or claim.date not in dates_in_evidence(match.group()):
+            if not period or claim.date not in dates_in_evidence(
+                match.group(), us_dates=_uses_us_dates(source)
+            ):
                 continue
             try:
                 actual = canonical_period(period.group(), source, claim.type, claim.date)
@@ -523,6 +556,7 @@ def verify_claims(
             extra={"extras": {"source": source.key, "count": ancient}},
         )
         claims = [claim for claim in claims if claim.date >= retire_cutoff]
+    us_dates = _uses_us_dates(source)
     for claim in claims:
         if claim.type == EventType.EARNINGS_CALL and pre_earnings_call(claim.evidence):
             continue
@@ -533,13 +567,13 @@ def verify_claims(
                 (url, text)
                 for url, text in documents.items()
                 if (not claim.source_url or url == claim.source_url)
-                and evidence_verifies(claim.date, claim.evidence, text)
+                and evidence_verifies(claim.date, claim.evidence, text, us_dates=us_dates)
             ]
             if candidates:
                 document_url, document_text = candidates[0]
             else:
                 document_text = ""
-        if not evidence_verifies(claim.date, claim.evidence, document_text):
+        if not evidence_verifies(claim.date, claim.evidence, document_text, us_dates=us_dates):
             rejected.append(
                 RejectedClaim(
                     claim=claim,
@@ -552,9 +586,9 @@ def verify_claims(
         except ValueError as exc:
             rejected.append(RejectedClaim(claim=claim, reason=str(exc)))
             continue
-        if not evidence_has_full_date(claim.date, claim.evidence) and not period_date_plausible(
-            period, claim.date, source.fy_end_month
-        ):
+        if not evidence_has_full_date(
+            claim.date, claim.evidence, us_dates=us_dates
+        ) and not period_date_plausible(period, claim.date, source.fy_end_month):
             rejected.append(
                 RejectedClaim(
                     claim=claim,
@@ -692,9 +726,14 @@ def verify_claims(
             ):
                 item = previous.model_copy(
                     update={
+                        "release_time": None,
+                        "release_tz": None,
                         "timing_issue": "Current source rows disagree; review required",
                         "timing_disputes": merge_timing_disputes(
-                            item.date, tuple((t for t in (previous.timing, item.timing) if t))
+                            previous.date,
+                            previous.timing_disputes,
+                            item.timing_disputes,
+                            tuple((t for t in (previous.timing, item.timing) if t)),
                         ),
                     }
                 )
@@ -727,7 +766,9 @@ def verify_claims(
     )
 
 
-def reverify_event(event: Event, page_text: str, *, today: date) -> Event | None:
-    if not evidence_verifies(event.date, event.evidence, page_text):
+def reverify_event(
+    event: Event, page_text: str, *, today: date, us_dates: bool = False
+) -> Event | None:
+    if not evidence_verifies(event.date, event.evidence, page_text, us_dates=us_dates):
         return None
     return with_legacy_evidence(event.model_copy(update={"last_verified": today}))

@@ -238,7 +238,8 @@ async def test_holdings_csv_identity_columns_are_optional_in_position_and_count(
         assert not PersonalStore(seeded.db, "alice").follows()
         handle = re.search(r'name="handle" value="([^"]+)"', response.text)[1]
         payload = preview_payload(handle)
-        assert set(payload) == {"person", "revision", "exp", "items"}
+        assert set(payload) == {"purpose", "person", "revision", "exp", "items"}
+        assert payload["purpose"] == "interests_preview"
         assert payload["person"] == "alice"
         assert payload["items"] == [{"ticker": "ALPHA", "exchange": "XNAS"}]
         response = await client.post(

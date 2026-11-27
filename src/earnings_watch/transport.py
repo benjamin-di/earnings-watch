@@ -88,23 +88,26 @@ class Transport:
                 trust_env=False,
                 verify=ssl.create_default_context(),
                 transport=self.mock,
+                limits=httpx.Limits(max_keepalive_connections=0),
             ) as client:
                 for _ in range(11):
                     url = public_url(url)
                     host = urlsplit(url).hostname or ""
                     if host not in self.hosts:
                         raise ValueError("host is outside the configured issuer/provider allowlist")
+                    hop_user_agent = user_agent
                     if host in {"data.sec.gov", "www.sec.gov"}:
                         if not self.sec_contact or "@" not in self.sec_contact:
                             raise ValueError("SEC provider requires a configured contact email")
-                        user_agent = "earnings-watch/0.1 " + self.sec_contact
+                        hop_user_agent = "earnings-watch/0.1 " + self.sec_contact
                     # DNS is checked even in tests; tests provide a deterministic resolver.
                     records = await asyncio.to_thread(
                         self.resolver, host, 443, type=socket.SOCK_STREAM
                     )
                     addresses = {r[4][0] for r in records}
                     if not addresses or any(
-                        not ipaddress.ip_address(ip).is_global for ip in addresses
+                        not (addr := ipaddress.ip_address(ip)).is_global or addr.is_multicast
+                        for ip in addresses
                     ):
                         raise ValueError("DNS resolved to a non-public address")
                     ip = sorted(
@@ -131,7 +134,7 @@ class Transport:
                         )
                         request_headers = dict(headers or {}) | {
                             "Host": host,
-                            "User-Agent": user_agent,
+                            "User-Agent": hop_user_agent,
                         }
                         cache_key = "cache:" + hashlib.sha256(url.encode()).hexdigest()
                         cached = (

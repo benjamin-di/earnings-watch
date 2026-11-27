@@ -121,7 +121,7 @@ async def register_pending(
             ):
                 raise ValueError("proposed source key already identifies another issuer")
             host = urlsplit(source.calendar_url).hostname
-            transport = Transport({host} if host else set())
+            transport = Transport({host} if host else set(), sec_contact=settings.sec_contact)
             page = await capture(transport, source.calendar_url)
             # A claim's display name is not independent evidence. Require the
             # user-supplied name, else their ticker, on the captured official page.

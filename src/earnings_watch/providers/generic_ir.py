@@ -43,7 +43,8 @@ async def capture(transport: Transport, url: str) -> Capture:
     response = await transport.get(url)
     if response.status == 304:
         return Capture(response.url, "")
-    if "html" not in response.content_type and not response.content_type.startswith("text/"):
+    content_type = response.content_type.lower()
+    if "html" not in content_type and not content_type.startswith("text/"):
         raise ValueError("calendar page is not text or HTML")
     body = response.body.decode("utf-8", errors="replace")
     parser = Links(response.url)
