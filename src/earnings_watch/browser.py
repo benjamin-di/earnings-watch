@@ -32,9 +32,11 @@ class McpBrowserReader:
         self.remaining -= 1
         async with self.client_factory() as client:
 
-            async def call(name, arguments):
+            async def call(name, arguments, *, expect_dict=True):
                 result = await client.call_tool(name, arguments, timeout=30)
-                if result.is_error or not isinstance(result.data, dict):
+                if result.is_error:
+                    raise ValueError("browser did not return a deterministic capture")
+                if expect_dict and not isinstance(result.data, dict):
                     raise ValueError("browser did not return a deterministic capture")
                 return result.data
 
@@ -42,7 +44,7 @@ class McpBrowserReader:
             try:
                 started = await call("start", {})
                 session = {"sessionId": started["sessionId"]}
-                await call("navigate", session | {"url": url})
+                await call("navigate", session | {"url": url}, expect_dict=False)
                 page = await call("extract", session)
             finally:
                 if session:

@@ -180,6 +180,7 @@ class Maintenance:
                 runner,
                 cap=min(10, settings.max_calls_per_run),
                 dry_run=dry_run,
+                browser=self.browser,
             )
 
     async def sweep(
@@ -228,6 +229,7 @@ class Maintenance:
                 if docs_only or not extraction_enabled or "generic_ir" not in providers
                 else min(10, settings.max_calls_per_run),
                 dry_run=dry_run,
+                browser=self.browser,
             )
             sources = self.catalogue.sources()
             active = self.catalogue.active_keys()
@@ -340,6 +342,7 @@ class Maintenance:
                                                 runner,
                                                 model=settings.model,
                                                 dry_run=dry_run,
+                                                browser=self.browser,
                                                 sec_contact=settings.sec_contact,
                                             )
                                         raise

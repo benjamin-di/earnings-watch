@@ -51,6 +51,23 @@ async def test_browser_refuses_foreign_page_and_cleans_up_failures(final, fail):
     assert browser.calls[-1] == "end"
 
 
+async def test_browser_accepts_plain_text_navigate_response():
+    class TextNavigateBrowser(Browser):
+        async def call_tool(self, name, args, **kwargs):
+            if name == "navigate":
+                self.calls.append(name)
+                return SimpleNamespace(
+                    is_error=False, data="navigated to https://issuer.example/calendar"
+                )
+            return await super().call_tool(name, args, **kwargs)
+
+    browser = TextNavigateBrowser()
+    reader = McpBrowserReader(lambda: browser, {"issuer.example"}, max_reads=1)
+    page = await reader.read("https://issuer.example/calendar")
+    assert page.url == "https://issuer.example/calendar"
+    assert browser.calls == ["start", "navigate", "extract", "end"]
+
+
 async def test_source_repair_preserves_identity_and_has_durable_cooldown(seeded, monkeypatch):
     from unittest.mock import AsyncMock
     from conftest import source

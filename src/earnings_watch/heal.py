@@ -27,6 +27,7 @@ async def repair(
     model=None,
     dry_run=False,
     transport=None,
+    browser=None,
     sec_contact: str = "",
 ):
     key = "source:" + source.key
@@ -56,10 +57,20 @@ async def repair(
     urls = SourceUrls.model_validate(result.parsed)
     updated = Source.model_validate(source.model_dump(mode="json") | urls.model_dump())
     hosts = {urlsplit(url).hostname for url in urls.model_dump().values() if url}
-    page = await capture(
-        transport or Transport({h for h in hosts if h}, sec_contact=sec_contact),
-        updated.calendar_url,
-    )
+    valid_hosts = {h for h in hosts if h}
+    try:
+        page = await capture(
+            transport or Transport(valid_hosts, sec_contact=sec_contact),
+            updated.calendar_url,
+        )
+    except Exception as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", 0)
+        if browser is None or not (status == 403 or 500 <= status < 600):
+            raise
+        try:
+            page = await browser.read(updated.calendar_url, allow_hosts=valid_hosts)
+        except TypeError:
+            page = await browser.read(updated.calendar_url)
     name_matched = source.name.casefold() in page.text.casefold()
     ticker_matched = len(source.ticker) > 2 and bool(
         re.search(rf"(?<!\w){re.escape(source.ticker)}(?!\w)", page.text, re.I)

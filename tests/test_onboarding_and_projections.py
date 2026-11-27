@@ -214,6 +214,57 @@ async def test_fast_path_register_records_and_clears_failure_reason(seeded):
     assert not cat.has_pending_registrations()
 
 
+async def test_fast_path_register_falls_back_to_browser_on_403(seeded, monkeypatch):
+    from earnings_watch.providers.base import Capture
+
+    accounts.provision(seeded.db, "alice")
+    person = PersonalStore(seeded.db, "alice")
+    person.watch("CFCO", "XNAS")
+
+    class ProposeRunner:
+        async def run(self, task, *, research_config=None):
+            return AgentResult(
+                parsed=source(key="cfco", ticker="CFCO").model_copy(
+                    update={
+                        "name": "Cloudflare Protected Corp",
+                        "exchange": "XNAS",
+                        "calendar_url": "https://investor.cfco.example/overview/default.aspx",
+                    }
+                ),
+                backend="fake",
+            )
+
+    async def fail_403(transport, url):
+        req = httpx.Request("GET", url)
+        resp = httpx.Response(403, request=req)
+        raise httpx.HTTPStatusError("403 Forbidden", request=req, response=resp)
+
+    monkeypatch.setattr("earnings_watch.registration.capture", fail_403)
+
+    browser_calls = []
+
+    class FakeBrowser:
+        async def read(self, url, *, allow_hosts=None):
+            browser_calls.append((url, allow_hosts))
+            return Capture(
+                url,
+                "Cloudflare Protected Corp (NASDAQ: CFCO) Investor Relations Financial Calendar",
+                (),
+            )
+
+    maint = Maintenance(seeded, runner=ProposeRunner(), browser=FakeBrowser())
+    res = await maint.register()
+    assert res["registered"] == ["cfco"]
+    assert res["errors"] == []
+    assert browser_calls == [
+        ("https://investor.cfco.example/overview/default.aspx", {"investor.cfco.example"})
+    ]
+    row = person.follows()[0]
+    assert row["state"] == "registered"
+    assert row["source_key"] == "cfco"
+    assert row["reason"] == ""
+
+
 def test_recent_results_and_timeline_grouping(seeded):
     accounts.provision(seeded.db, "alice")
     PersonalStore(seeded.db, "alice").watch("ALPHA", "XNAS")

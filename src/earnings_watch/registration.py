@@ -37,7 +37,7 @@ def _merged_pending(db) -> list[dict]:
 
 
 async def register_pending(
-    settings, catalogue, runner, *, cap: int = 10, dry_run: bool = False
+    settings, catalogue, runner, *, cap: int = 10, dry_run: bool = False, browser=None
 ) -> dict:
     with connect(settings.db) as db:
         rows = _merged_pending(db)
@@ -122,7 +122,18 @@ async def register_pending(
                 raise ValueError("proposed source key already identifies another issuer")
             host = urlsplit(source.calendar_url).hostname
             transport = Transport({host} if host else set(), sec_contact=settings.sec_contact)
-            page = await capture(transport, source.calendar_url)
+            try:
+                page = await capture(transport, source.calendar_url)
+            except Exception as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", 0)
+                if browser is None or not (status == 403 or 500 <= status < 600):
+                    raise
+                try:
+                    page = await browser.read(
+                        source.calendar_url, allow_hosts={host} if host else set()
+                    )
+                except TypeError:
+                    page = await browser.read(source.calendar_url)
             # A claim's display name is not independent evidence. Require the
             # user-supplied name, else their ticker, on the captured official page.
             needle = hints.get("name") or hints.get("isin") or row["ticker"]

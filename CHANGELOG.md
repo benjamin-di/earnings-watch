@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.1] - 2026-11-27
+
+### Fixed
+
+- Fall back to the configured `browser` reader in `registration.register_pending()` and `heal.repair()` when an official IR page returns HTTP 403 or 5xx, wiring `Maintenance.browser` into both paths.
+- Accept plain-text `navigate` responses in `McpBrowserReader.read()` instead of requiring a JSON object.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.8.0; no schema change.
+
 ## [0.8.0] - 2026-11-27
 
 ### Changed
