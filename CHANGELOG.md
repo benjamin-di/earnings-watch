@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.8.0] - 2026-11-27
+
+### Changed
+
+- Upgrade `signin-window[oidc]` from `0.4.17` to `>=0.14.0,<0.15`.
+- Align the Connections web UI (Upcoming, Companies, Digests & alerts, Brief preview, Calendar, holdings import review and error pages) with the shared suite design: light and dark themes, elevated cards, ink primary buttons, calmer badges and callouts, collapsible coverage notices, sentence-case copy and a 390px mobile layout. Routes, forms and authorization are unchanged.
+- Adopt `issuer-sources` v0.1.0, provenance CDN verification and library-targets v2.
+
+### Added
+
+- Support the optional `SIGNIN_WINDOW_SUITE` directory through `signin-window` 0.14.0: signed-in pages show a top bar with a group-filtered **Apps** switcher and account chip. Signed-out, refused and error pages never show it.
+
+### Upgrade
+
+- Action required: none. Optionally set `SIGNIN_WINDOW_SUITE` to enable the Apps switcher (see `docs/CONNECTIONS.md`). A sign-in that is mid-flight at the moment of upgrade is refused once and must be started again.
+- Rollback: compatible with 0.7.0; existing browser sessions survive upgrade and rollback; no schema change.
+
 ## [0.7.0] - 2026-11-27
 
 ### Added
