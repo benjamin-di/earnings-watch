@@ -102,12 +102,24 @@ async def poll(catalogue, source, transport, *, dry_run=False, research=None, pr
                     page = None
                 if page is not None:
                     for page_link in page.links:
-                        for role in ("release", "presentation", "statements"):
+                        for role in (
+                            "release",
+                            "presentation",
+                            "transcript",
+                            "databook",
+                            "statements",
+                        ):
                             doc = verify_link(
                                 source,
                                 row,
-                                page_link | {"role": role, "evidence": page_link["title"]},
+                                page_link
+                                | {
+                                    "role": role,
+                                    "evidence": page_link["title"],
+                                    "evidence_url": page.url,
+                                },
                                 page.text,
+                                capture_links=page.links,
                             )
                             if doc["verified"]:
                                 found.append(doc)

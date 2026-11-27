@@ -85,6 +85,59 @@ async def test_documents_verify_period_and_download_idempotently(seeded, tmp_pat
     }
     doc = verify_link(src, row, link, link["evidence"])
     assert doc["verified"]
+    # Official IR page linking to a CDN-hosted presentation and transcript is verified by provenance.
+    cdn_links = [
+        {
+            "url": "https://s2.q4cdn.com/99/q4-2026-slides.pdf",
+            "title": "Q4 2026 Investor Presentation",
+        },
+        {
+            "url": "https://d1io3yog0oux5.cloudfront.net/issuer/q4-2026-transcript.pdf",
+            "title": "Q4 2026 Earnings Call Transcript",
+        },
+    ]
+    cdn_pres = verify_link(
+        src,
+        row,
+        {
+            "url": "https://s2.q4cdn.com/99/q4-2026-slides.pdf",
+            "title": "Q4 2026 Investor Presentation",
+            "role": "presentation",
+            "evidence": "Q4 2026 Investor Presentation",
+            "evidence_url": src.calendar_url,
+        },
+        "Q4 2026 Investor Presentation and Q4 2026 Earnings Call Transcript",
+        capture_links=cdn_links,
+    )
+    assert cdn_pres["verified"]
+    cdn_transcript = verify_link(
+        src,
+        row,
+        {
+            "url": "https://d1io3yog0oux5.cloudfront.net/issuer/q4-2026-transcript.pdf",
+            "title": "Q4 2026 Earnings Call Transcript",
+            "role": "transcript",
+            "evidence": "Q4 2026 Earnings Call Transcript",
+            "evidence_url": src.calendar_url,
+        },
+        "Q4 2026 Investor Presentation and Q4 2026 Earnings Call Transcript",
+        capture_links=cdn_links,
+    )
+    assert cdn_transcript["verified"]
+    unlinked_cdn = verify_link(
+        src,
+        row,
+        {
+            "url": "https://s2.q4cdn.com/99/hallucinated.pdf",
+            "title": "Q4 2026 Investor Presentation",
+            "role": "presentation",
+            "evidence": "Q4 2026 Investor Presentation",
+            "evidence_url": src.calendar_url,
+        },
+        "Q4 2026 Investor Presentation",
+        capture_links=cdn_links,
+    )
+    assert not unlinked_cdn["verified"]
     bad = verify_link(
         src,
         row,

@@ -12,6 +12,15 @@ import json
 import os
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
+from issuer_sources.model import (
+    IrUrls,
+    LibraryTargetsPayload,
+    PeriodScheme,
+    PersonScope,
+    TargetCompany,
+    VerifiedDocument,
+    normalize_document_category,
+)
 from signin_window.oidc import BrowserAuth, OIDCConfig
 from starlette.applications import Starlette
 from starlette.datastructures import UploadFile
@@ -201,7 +210,7 @@ async def _targets_payload(settings, directory) -> dict:
     return {"schema": 1, "generated_at": generated_at, "people": result_people}
 
 
-async def _library_targets_payload(settings, directory) -> dict:
+async def _library_targets_payload(settings, directory, *, schema_version: int = 1) -> dict:
     generated_at = datetime.now(timezone.utc).isoformat()
     library = LibraryReader(settings.db)
     sources_by_key = {source.key: source for source in library.sources()}
@@ -213,16 +222,18 @@ async def _library_targets_payload(settings, directory) -> dict:
         source_key = event_to_source.get(str(doc.get("event_id") or ""))
         if not source_key:
             continue
-        docs_by_source.setdefault(source_key, []).append(
-            {
-                "id": str(doc.get("id") or ""),
-                "event_id": str(doc.get("event_id") or ""),
-                "url": str(doc.get("url") or ""),
-                "title": str(doc.get("title") or ""),
-                "role": str(doc.get("role") or ""),
-                "first_seen": str(doc.get("first_seen") or ""),
-            }
-        )
+        role_val = str(doc.get("role") or "")
+        entry = {
+            "id": str(doc.get("id") or ""),
+            "event_id": str(doc.get("event_id") or ""),
+            "url": str(doc.get("url") or ""),
+            "title": str(doc.get("title") or ""),
+            "role": role_val,
+            "first_seen": str(doc.get("first_seen") or ""),
+        }
+        if schema_version == 2:
+            entry["category"] = normalize_document_category(role_val).value
+        docs_by_source.setdefault(source_key, []).append(entry)
 
     active_source_keys: set[str] = set()
     scopes: list[dict] = []
@@ -247,6 +258,39 @@ async def _library_targets_payload(settings, directory) -> dict:
                 person_keys.add(source_key)
                 active_source_keys.add(source_key)
         scopes.append({"person": subject, "source_keys": sorted(person_keys)})
+
+    if schema_version == 2:
+        v2_companies = [
+            TargetCompany(
+                source_key=source.key,
+                ticker=source.ticker,
+                exchange=source.exchange or "",
+                name=source.name,
+                isin=source.isin,
+                sec_cik=source.sec_cik,
+                hkex_stock_id=source.hkex_stock_id,
+                lei=source.lei,
+                fy_end_month=source.fy_end_month,
+                period_scheme=PeriodScheme(source.period_scheme.value),
+                ir_urls=IrUrls(
+                    calendar=source.calendar_url,
+                    results=source.results_url,
+                    announcements=source.announcements_url,
+                ),
+                verified_documents=[
+                    VerifiedDocument.model_validate(d) for d in docs_by_source.get(source.key, [])
+                ],
+            )
+            for source_key in sorted(active_source_keys)
+            for source in (sources_by_key[source_key],)
+        ]
+        v2_payload = LibraryTargetsPayload(
+            schema=2,
+            generated_at=generated_at,
+            companies=v2_companies,
+            scopes=[PersonScope.model_validate(s) for s in scopes],
+        )
+        return v2_payload.model_dump(by_alias=True, mode="json")
 
     companies: list[dict] = []
     for source_key in sorted(active_source_keys):
@@ -1505,8 +1549,17 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 status_code=503,
                 headers={"Cache-Control": "no-store"},
             )
+        raw_schema = request.query_params.get("schema", "1").strip()
+        if raw_schema not in {"1", "2"}:
+            return JSONResponse(
+                {"error": "unsupported schema version"},
+                status_code=400,
+                headers={"Cache-Control": "no-store"},
+            )
         try:
-            payload = await _library_targets_payload(settings, directory)
+            payload = await _library_targets_payload(
+                settings, directory, schema_version=int(raw_schema)
+            )
         except Exception:
             return JSONResponse(
                 {"error": "identity directory unavailable"},

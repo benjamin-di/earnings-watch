@@ -304,6 +304,24 @@ async def test_library_targets_zero_pii_scoping_documents_and_exchange_normaliza
     ]
     assert gamma_out["verified_documents"] == []
 
+    # Opt-in schema=2 emits typed ir_urls, fy_end_month, period_scheme, and normalized categories.
+    async with (
+        app.earnings_app.router.lifespan_context(app.earnings_app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://localhost"
+        ) as client,
+    ):
+        resp_v2 = await client.get(
+            "/internal/library-targets?schema=2", headers={"Authorization": "Bearer " + lib_tok}
+        )
+        assert resp_v2.status_code == 200
+        v2_body = resp_v2.json()
+    assert v2_body["schema"] == 2
+    v2_alpha = next(c for c in v2_body["companies"] if c["source_key"] == "alpha")
+    assert v2_alpha["ir_urls"]["calendar"] == "https://issuer.example/calendar"
+    assert v2_alpha["ir_urls"]["announcements"] == "https://issuer.example/announcements"
+    assert v2_alpha["verified_documents"][0]["category"] == "results_release"
+
 
 async def test_library_targets_directory_outage_fails_closed(seeded, monkeypatch):
     lib_tok = "l" * 40

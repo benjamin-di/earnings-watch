@@ -10,13 +10,76 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from issuer_sources.model import IrUrls, IssuerIdentity, PeriodScheme
+from issuer_sources.webpage import PageCapture, PageLink, verify_document_link
+
 from .model.sources import Source, period_consistent
 from .store.database import digest
 from .transport import Transport
 
 
-def verify_link(source: Source, event: dict, link: dict, page_text: str) -> dict:
+def _to_issuer_identity(source: Source) -> IssuerIdentity:
+    return IssuerIdentity(
+        source_key=source.key,
+        ticker=source.ticker,
+        exchange=source.exchange or "",
+        name=source.name,
+        isin=source.isin,
+        sec_cik=source.sec_cik,
+        hkex_stock_id=source.hkex_stock_id,
+        lei=source.lei,
+        fy_end_month=source.fy_end_month,
+        period_scheme=PeriodScheme(source.period_scheme.value),
+        ir_urls=IrUrls(
+            calendar=source.calendar_url,
+            results=source.results_url,
+            announcements=source.announcements_url,
+        ),
+    )
+
+
+def verify_link(
+    source: Source,
+    event: dict,
+    link: dict,
+    page_text: str,
+    *,
+    capture_links: list[dict] | tuple[dict, ...] | None = None,
+) -> dict:
     url, title, evidence = link["url"], link.get("title", ""), link.get("evidence", "")
+    role = link.get("role", "other")
+    evidence_url = link.get("evidence_url", source.results_url or source.calendar_url)
+    if capture_links is not None:
+        normalized_links = tuple(
+            PageLink(url=str(item["url"]), title=str(item.get("title") or ""))
+            for item in capture_links
+            if isinstance(item, dict) and item.get("url")
+        )
+        check = verify_document_link(
+            _to_issuer_identity(source),
+            PageCapture(url=evidence_url, text=page_text, links=normalized_links),
+            url=url,
+            title=title,
+            evidence=evidence,
+            category=role,
+            period=event["period"],
+            event_id=event["id"],
+        )
+        return {
+            "id": digest([event["id"], url]),
+            "event_id": event["id"],
+            "role": role,
+            "url": check.document.url,
+            "title": check.document.title,
+            "evidence": check.document.evidence,
+            "evidence_url": evidence_url,
+            "verified": check.verified,
+            "unverified_reason": None
+            if check.verified
+            else (check.reason or "issuer, period, role or verbatim evidence not established"),
+            "first_seen": check.document.first_seen,
+            "sha256": "",
+        }
     hosts = {
         urlsplit(u).hostname
         for u in (source.calendar_url, source.results_url, source.announcements_url)
@@ -28,12 +91,13 @@ def verify_link(source: Source, event: dict, link: dict, page_text: str) -> dict
         and " ".join(evidence.split()).casefold() in " ".join(page_text.split()).casefold()
     )
     period = period_consistent(title + " " + evidence, source, event["period"])
-    role = link.get("role", "other")
     role_evidence = bool(
         re.search(
             {
                 "release": r"result|earning|release",
-                "presentation": r"presentation|slides|deck",
+                "presentation": r"presentation|slides?|deck",
+                "transcript": r"transcript|prepared\s+remarks|conference\s+call|earnings\s+call",
+                "databook": r"databook|data\s+book|fact\s*sheet|supplement|spreadsheet|excel|xlsx",
                 "statements": r"statement|report|financial",
                 "other": r".",
             }.get(role, r"(?!)"),
@@ -49,7 +113,7 @@ def verify_link(source: Source, event: dict, link: dict, page_text: str) -> dict
         "url": url,
         "title": title[:120],
         "evidence": evidence[:500],
-        "evidence_url": link.get("evidence_url", source.results_url or source.calendar_url),
+        "evidence_url": evidence_url,
         "verified": verified,
         "unverified_reason": None
         if verified
@@ -184,7 +248,13 @@ async def research(source, event, runner, *, model=None, sec_contact: str = ""):
             record = next((c for c in captures if c["url"] == candidate.evidence_url), None)
             if record is None or candidate.url not in {link["url"] for link in record["links"]}:
                 continue
-            doc = verify_link(source, event, candidate.model_dump(), record["text"])
+            doc = verify_link(
+                source,
+                event,
+                candidate.model_dump(),
+                record["text"],
+                capture_links=record["links"],
+            )
             if doc["verified"]:
                 verified.append(doc)
         return verified, 2 if result.repaired else 1
