@@ -1,12 +1,28 @@
 /* Same-origin progressive enhancement for Earnings Watch. Tokens stay server-side. */
 "use strict";
 (() => {
+  // 0. Close the Apps switcher on outside click or Escape.
+  const switcher = document.querySelector("details.suite-switch");
+  if (switcher) {
+    document.addEventListener("click", (event) => {
+      if (switcher.open && !switcher.contains(event.target)) {
+        switcher.open = false;
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !switcher.open) return;
+      switcher.open = false;
+      switcher.querySelector("summary")?.focus();
+    });
+  }
+
   const statusBanner = document.getElementById("status-banner");
 
   function setStatus(text, kind = "ok") {
     if (!statusBanner) return;
     statusBanner.textContent = text || "";
     statusBanner.classList.remove("ok", "error");
+    statusBanner.hidden = !text;
     if (text) statusBanner.classList.add(kind);
   }
 
@@ -18,7 +34,7 @@
     }
   }
 
-  // 1. Copy private calendar link with clear feedback.
+  // 1. Copy private calendar link or suite address with clear feedback.
   document.addEventListener("click", async (event) => {
     const btn = event.target.closest("button[data-copy-code]");
     if (!btn) return;
@@ -28,11 +44,12 @@
     if (!text) return;
     const original = btn.dataset.originalLabel || btn.textContent;
     btn.dataset.originalLabel = original;
+    const copiedLabel = btn.dataset.copied || "Link copied";
     try {
       await navigator.clipboard.writeText(text);
-      btn.textContent = "Link copied";
+      btn.textContent = copiedLabel;
       setTimeout(() => {
-        if (btn.textContent === "Link copied") btn.textContent = original;
+        if (btn.textContent === copiedLabel) btn.textContent = original;
       }, 2200);
     } catch (_) {
       const range = document.createRange();
@@ -40,7 +57,7 @@
       const sel = window.getSelection();
       sel?.removeAllRanges();
       sel?.addRange(range);
-      btn.textContent = "Link selected — copy manually";
+      btn.textContent = "Selected — copy manually";
     }
   });
 

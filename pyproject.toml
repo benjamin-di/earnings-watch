@@ -11,7 +11,7 @@ license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
 authors = [{name = "benjamin-di"}]
-dependencies = ["pydantic>=2.11,<3", "httpx>=0.28,<1", "fastmcp==4.1.3", "pyyaml>=6,<7", "html2text>=2024.2", "tzdata>=2024.1", "signin-window[oidc]==0.4.17", "python-multipart>=0.0.20,<1", "pypdf>=5,<7", "issuer-sources[agent] @ https://github.com/benjamin-di/issuer-sources/archive/refs/tags/v0.1.0.tar.gz"]
+dependencies = ["pydantic>=2.11,<3", "httpx>=0.28,<1", "fastmcp==4.1.3", "pyyaml>=6,<7", "html2text>=2024.2", "tzdata>=2024.1", "signin-window[oidc]>=0.14.0,<0.15", "python-multipart>=0.0.20,<1", "pypdf>=5,<7", "issuer-sources[agent] @ https://github.com/benjamin-di/issuer-sources/archive/refs/tags/v0.1.0.tar.gz"]
 
 [project.scripts]
 earnings-watch = "earnings_watch.cli:main"

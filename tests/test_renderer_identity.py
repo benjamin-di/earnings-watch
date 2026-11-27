@@ -74,7 +74,7 @@ def assert_footer(source, build):
     assert "".join(footer.summary) == f"{build.service} v{build.version} · {build.short_revision}"
     assert footer.details == 1
     assert "".join(footer.code) == build.source_revision
-    assert "Source revision: " in "".join(footer.text)
+    assert "Source revision" in "".join(footer.text)
     assert "user-select:text" in source or "/connections/assets/app.css" in source
 
 
@@ -219,9 +219,9 @@ class Auth:
 @pytest.mark.parametrize(
     "outcome,status,title",
     [
-        ("home", 200, "The dates and documents"),
-        ("denied", 403, "Earnings is unavailable"),
-        ("home_failure", 503, "Earnings is temporarily unavailable"),
+        ("home", 200, "Dates and documents for the companies you follow."),
+        ("denied", 403, "Earnings Watch is unavailable"),
+        ("home_failure", 503, "Earnings Watch is temporarily unavailable"),
         ("preview", 200, "Review holdings import"),
         ("conflict", 409, "Please review your change"),
         ("change_failure", 503, "Could not save right now"),

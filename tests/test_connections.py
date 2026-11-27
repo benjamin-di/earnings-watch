@@ -79,7 +79,7 @@ async def test_page_two_people_admission_and_feed_rotation(seeded):
         assert page.status_code == 200, page.text
         assert all(
             label in page.text
-            for label in ("Upcoming", "Companies", "Digests &amp; Alerts", "Calendar")
+            for label in ("Upcoming", "Companies", "Digests &amp; alerts", "Calendar")
         )
         digests_page = await client.get("/connections/?view=digests")
         assert digests_page.status_code == 200

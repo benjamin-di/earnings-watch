@@ -54,6 +54,41 @@ accounts are keyed by the verified immutable OIDC subject. The browser uses only
 verified sign-in email without a directory. `users remove SUBJECT` deletes and
 blocks recreation; explicit `users add SUBJECT` re-enrolls it.
 
+To show an **Apps** switcher in the top bar across sibling web apps, set the
+optional `SIGNIN_WINDOW_SUITE` environment variable to a JSON suite directory
+consumed by `signin-window`:
+
+```json
+{
+  "name": "Connect",
+  "apps": [
+    {
+      "label": "Earnings",
+      "url": "https://earnings.example.com/connections/",
+      "section": "Workspaces",
+      "description": "Dates and documents for your companies",
+      "groups": ["earnings-users"]
+    },
+    {
+      "label": "Filings",
+      "url": "https://filings.example.com/",
+      "section": "Workspaces",
+      "description": "Read and compare company filings",
+      "groups": ["filings-users"]
+    }
+  ]
+}
+```
+
+When `SIGNIN_WINDOW_SUITE` is unset, the switcher is omitted. Links are filtered
+by the signed-in visitor's OIDC groups and are navigation only; signed-out,
+refused, and error pages never show the switcher.
+
+The directory may also carry one top-level `"endpoint"` object (`title`, `url`,
+optional `help`): an address for visitors to copy into another program. It is
+shown as a collapsed row only when this application's entry sets
+`"endpoint": true`.
+
 Hosted mode additionally requires an exact-subject identity directory,
 `directory_required = true`, and separate backend bearer environment references.
 The admission gateway must overwrite `X-Fleet-Subject` from verified identity;

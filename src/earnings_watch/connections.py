@@ -434,9 +434,14 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         class_attr = f' class="{cls}"' if cls else ""
         return f'<button type="submit"{class_attr}>{html.escape(label)}</button>'
 
+    def _suite_for(request):
+        if auth is None or not hasattr(auth, "suite"):
+            return None
+        return auth.suite(request)
+
     def _certainty_badge(event_row: dict) -> str:
         status = event_row.get("status", "")
-        cls = "pill pill-success" if status == "ir-confirmed" else "pill"
+        cls = "badge ok" if status == "ir-confirmed" else "badge"
         return f'<span class="{cls}">{html.escape(str(event_row.get("certainty") or ""))}</span>'
 
     def _render_event_card(event_row: dict, changed: set[str], *, show_holdings: bool) -> str:
@@ -525,7 +530,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         parts: list[str] = []
         note = current.get("coverage_note", "")
         if note:
-            parts.append('<p class="notice" role="status">' + html.escape(note) + "</p>")
+            parts.append('<p class="callout info" role="status">' + html.escape(note) + "</p>")
 
         pills = [("all", "All")]
         if show_holdings:
@@ -544,7 +549,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             header_actions = (
                 '<form class="hub-inline-form" method="post" action="/connections/mark-seen" data-async="mark-seen">'
                 + form_fields(profile, view="upcoming")
-                + button("Mark changes seen", cls="button btn-sm")
+                + button("Mark changes seen", cls="button secondary btn-sm")
                 + "</form>"
             )
         parts.append(
@@ -556,8 +561,8 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         )
 
         group_defs = [
-            ("this_week", "This Week"),
-            ("next_week", "Next Week"),
+            ("this_week", "This week"),
+            ("next_week", "Next week"),
             ("later", "Later"),
         ]
         any_upcoming = False
@@ -576,7 +581,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         if not any_upcoming:
             parts.append(
                 '<section class="empty"><p>No upcoming events match this view.</p>'
-                '<p><a class="button" href="/connections/?view=companies">Add a company</a></p></section>'
+                '<p><a class="button primary" href="/connections/?view=companies">Add a company</a></p></section>'
             )
 
         if recent_events:
@@ -585,12 +590,12 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 for e in recent_events
             )
             parts.append(
-                f'<details class="section-details"><summary>Recent Releases (14d) · {len(recent_events)}</summary>'
+                f'<details class="section-details"><summary>Recent releases (14 days) · {len(recent_events)}</summary>'
                 f'<ul class="event-list">{recent_cards}</ul></details>'
             )
         else:
             parts.append(
-                '<details class="section-details"><summary>Recent Releases (14d) · 0</summary>'
+                '<details class="section-details"><summary>Recent releases (14 days) · 0</summary>'
                 '<p class="muted small">No releases in the last 14 days.</p></details>'
             )
         return "".join(parts)
@@ -688,14 +693,14 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         summary_bits: list[str] = []
         if show_holdings:
             sync_note = f" (synced {sync_dates[-1]})" if sync_dates else ""
-            summary_bits.append(f"{holding_count} Portfolio Holdings{sync_note}")
-        summary_bits.append(f"{watchlist_count} Watchlist")
+            summary_bits.append(f"{holding_count} portfolio holdings{sync_note}")
+        summary_bits.append(f"{watchlist_count} watchlist")
         summary_line = " · ".join(summary_bits)
 
         filter_opts = ['<option value="all">All companies</option>']
         if show_holdings:
-            filter_opts.append('<option value="holding">Portfolio Holdings</option>')
-        muted_filter_label = "Muted (Calendar or News)" if news_enabled else "Muted"
+            filter_opts.append('<option value="holding">Portfolio holdings</option>')
+        muted_filter_label = "Muted (calendar or news)" if news_enabled else "Muted"
         filter_opts.extend(
             [
                 '<option value="watchlist">Watchlist</option>',
@@ -774,7 +779,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             if item["is_watchlist"]:
                 badges.append('<span class="pill" data-badge="watchlist">Watchlist</span>')
             if item["state"] == "queued":
-                badges.append('<span class="pill pill-warning">Discovering...</span>')
+                badges.append('<span class="badge warn">Discovering…</span>')
 
             ev = upcoming_by_source.get(item["source_key"]) if item.get("source_key") else None
             if ev:
@@ -864,7 +869,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         )
         alerts_card = (
             '<article class="panel">'
-            '<div class="panel-head"><h2>Earnings Alerts</h2></div>'
+            '<div class="card-head"><h2>Earnings alerts</h2></div>'
             '<p class="muted small">Sent to '
             + html.escape(email_label)
             + " (your sign-in email).</p>"
@@ -882,11 +887,13 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         if news_enabled:
             pause_until = str(prefs.get("news_pause_until") or "")
             if not prefs.get("news_digest"):
-                status_badge = '<span class="pill">Off</span>'
+                status_badge = '<span class="badge">Off</span>'
             elif pause_until and pause_until >= str(local_today):
-                status_badge = f'<span class="pill pill-warning">Paused until {html.escape(pause_until)}</span>'
+                status_badge = (
+                    f'<span class="badge warn">Paused until {html.escape(pause_until)}</span>'
+                )
             else:
-                status_badge = '<span class="pill pill-success">Active</span>'
+                status_badge = '<span class="badge ok">Active</span>'
 
             slot_a_local = format_utc_slot(23, 30, tz_name, ref_date=local_today)
             slot_b_local = format_utc_slot(11, 30, tz_name, ref_date=local_today)
@@ -926,7 +933,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
 
             news_card = (
                 '<article class="panel">'
-                f'<div class="panel-head"><h2>Company News Digest</h2>{status_badge}</div>'
+                f'<div class="card-head"><h2>Company news digest</h2>{status_badge}</div>'
                 '<p class="muted small">Delivered to '
                 + html.escape(email_label)
                 + " · times shown in "
@@ -935,7 +942,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 '<div class="stack">'
                 '<label class="check"><input type="checkbox" name="news_digest"'
                 + (" checked" if prefs.get("news_digest") else "")
-                + "> Enable Company News Digest</label>"
+                + "> Enable company news digest</label>"
                 + '<div class="field"><label for="news-pause">Pause until (optional)</label>'
                 + f'<input id="news-pause" type="date" name="news_pause_until" value="{html.escape(pause_until, quote=True)}"></div>'
                 + f'<fieldset class="radios"><legend>Delivery cadence</legend>{radios_html}</fieldset>'
@@ -954,11 +961,11 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             "urgent": "Urgent",
         }
         state_labels = {
-            "sent": ("Sent", "pill pill-success"),
-            "pending": ("Pending", "pill"),
-            "unknown": ("Waiting review", "pill pill-warning"),
-            "suppressed": ("Suppressed", "pill"),
-            "superseded": ("Superseded", "pill"),
+            "sent": ("Sent", "badge ok"),
+            "pending": ("Pending", "badge"),
+            "unknown": ("Waiting review", "badge warn"),
+            "suppressed": ("Suppressed", "badge"),
+            "superseded": ("Superseded", "badge"),
         }
         try:
             user_tz = ZoneInfo(tz_name)
@@ -991,14 +998,14 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     "</div>"
                 )
             history_html = (
-                '<section class="history-section" aria-label="Recent Earnings Deliveries">'
-                '<div class="panel-head"><h2>Recent Earnings Deliveries</h2></div>'
+                '<section class="history-section" aria-label="Recent earnings deliveries">'
+                '<div class="card-head"><h2>Recent deliveries</h2></div>'
                 f'<div class="company-list">{"".join(d_items)}</div></section>'
             )
         else:
             history_html = (
-                '<section class="history-section" aria-label="Recent Earnings Deliveries">'
-                '<div class="panel-head"><h2>Recent Earnings Deliveries</h2></div>'
+                '<section class="history-section" aria-label="Recent earnings deliveries">'
+                '<div class="card-head"><h2>Recent deliveries</h2></div>'
                 '<p class="muted small">No notifications recorded yet.</p></section>'
             )
 
@@ -1011,7 +1018,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             + '<div class="form-error" role="alert"></div>'
             + '<div class="actions-row">'
             + button("Save preferences", cls="button primary")
-            + '<a class="button" href="/connections/?view=preview">Preview next brief</a>'
+            + '<a class="button secondary" href="/connections/?view=preview">Preview next brief</a>'
             + "</div></form>"
             + history_html
         )
@@ -1025,8 +1032,8 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             rendered = render_email(kind, payload, timezone_name=tz_name)
             cards.append(
                 '<article class="panel">'
-                f'<div class="panel-head"><h2>{html.escape(rendered.subject)}</h2>'
-                f'<span class="pill pill-success">{html.escape(kind)}</span></div>'
+                f'<div class="card-head"><h2>{html.escape(rendered.subject)}</h2>'
+                f'<span class="badge ok">{html.escape(kind)}</span></div>'
                 f'<pre class="hub-preview-text">{html.escape(rendered.text.strip())}</pre>'
                 "</article>"
             )
@@ -1049,8 +1056,8 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             rendered = render_email("weekly_brief", sample_payload, timezone_name=tz_name)
             cards.append(
                 '<article class="panel">'
-                f'<div class="panel-head"><h2>{html.escape(rendered.subject)}</h2>'
-                '<span class="pill">Sample (none due right now)</span></div>'
+                f'<div class="card-head"><h2>{html.escape(rendered.subject)}</h2>'
+                '<span class="badge">Sample (none due right now)</span></div>'
                 '<p class="muted small">No notification is due at this moment (quiet day or before your brief hour). '
                 "Here is what a 7-day brief looks like from your current follows:</p>"
                 f'<pre class="hub-preview-text">{html.escape(rendered.text.strip())}</pre>'
@@ -1059,15 +1066,16 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
 
         return (
             '<div class="actions-row preview-back">'
-            '<a class="button" href="/connections/?view=digests">← Back to Digests</a>'
+            '<a class="button secondary" href="/connections/?view=digests">← Back to digests</a>'
             "</div>" + "".join(cards)
         )
 
     def _render_calendar_tab(service, profile, *, is_windows: bool = False) -> str:
         token = accounts.feed_token(settings.db, profile["person"], service.signing_key)
         link = settings.public_url.rstrip("/") + "/calendar/" + token + ".ics"
+        has_webcal = link.startswith("https://") and not is_windows
         actions_row = ""
-        if link.startswith("https://") and not is_windows:
+        if has_webcal:
             webcal_link = "webcal://" + link.removeprefix("https://")
             actions_row = (
                 '<div class="actions-row">'
@@ -1076,12 +1084,13 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 "</div>"
             )
         subscribe_hint = (
-            '<p class="help">'
+            '<div class="callout info">'
             "In Outlook, copy the private link below and paste it into "
-            "<strong>Add calendar &rarr; Subscribe from web</strong>.</p>"
+            "<strong>Add calendar &rarr; Subscribe from web</strong>.</div>"
             if is_windows
             else ""
         )
+        copy_cls = "button secondary btn-sm" if has_webcal else "button primary btn-sm"
         return (
             '<article class="panel">'
             "<h2>Calendar subscription</h2>"
@@ -1092,10 +1101,10 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             '<div class="eyebrow">Private calendar link</div>'
             '<div class="copy-row">'
             f'<code id="calendar-link">{html.escape(link, quote=True)}</code>'
-            '<button type="button" class="button btn-sm" data-copy-code="calendar-link">Copy link</button>'
+            f'<button type="button" class="{copy_cls}" data-copy-code="calendar-link" data-copied="Link copied">Copy link</button>'
             "</div></div>"
-            '<div class="actions-row">'
-            '<button type="button" class="button danger" popovertarget="reset-feed-popover">Reset private link</button>'
+            '<div class="calendar-manage">'
+            '<button type="button" class="button danger-link btn-sm" popovertarget="reset-feed-popover">Reset private link…</button>'
             "</div>"
             '<div id="reset-feed-popover" popover>'
             "<h2>Reset private calendar link?</h2>"
@@ -1105,7 +1114,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             + form_fields(profile, view="calendar")
             + button("Reset link", cls="button danger-solid")
             + "</form>"
-            '<button type="button" class="button" popovertarget="reset-feed-popover" popovertargetaction="hide">Cancel</button>'
+            '<button type="button" class="button secondary" popovertarget="reset-feed-popover" popovertargetaction="hide">Cancel</button>'
             "</div></div></article>"
         )
 
@@ -1146,17 +1155,23 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 filter_by = "all"
 
             titles = {
-                "upcoming": ("Upcoming", "The dates and documents for companies you care about."),
+                "upcoming": ("Upcoming", "Dates and documents for the companies you follow."),
                 "companies": (
                     "Companies",
-                    "Manage your portfolio holdings, watchlist, and alerts.",
+                    "Manage your holdings, watchlist, and alert toggles.",
                 ),
                 "digests": (
-                    "Digests & Alerts",
-                    "Control email alerts, delivery times, and timezone.",
+                    "Digests & alerts",
+                    "Choose which emails you get, when they arrive, and your timezone.",
                 ),
-                "calendar": ("Calendar", "Subscribe to your private read-only earnings feed."),
-                "preview": ("Brief Preview", "Preview what your next earnings email looks like."),
+                "calendar": (
+                    "Calendar",
+                    "Subscribe to a private, read-only feed of your company dates.",
+                ),
+                "preview": (
+                    "Brief preview",
+                    "A look at what your next earnings email will contain.",
+                ),
             }
             page_title, page_intro = titles[view]
 
@@ -1194,13 +1209,14 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     active_view=nav_view,
                     account_label=account_label,
                     coverage_warnings=coverage_warnings,
+                    suite=_suite_for(request),
                 )
             )
         except EarningsError as exc:
             return _hub_html(
                 hub_page(
-                    "Earnings is unavailable",
-                    "<p>" + html.escape(str(exc)) + "</p>",
+                    "Earnings Watch is unavailable",
+                    '<article class="panel"><p>' + html.escape(str(exc)) + "</p></article>",
                     show_nav=False,
                 ),
                 403,
@@ -1208,8 +1224,8 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         except Exception:
             return _hub_html(
                 hub_page(
-                    "Earnings is temporarily unavailable",
-                    "<p>Your companies and preferences are safe. Try again shortly.</p>",
+                    "Earnings Watch is temporarily unavailable",
+                    '<article class="panel"><p>Your companies and preferences are safe. Try again shortly.</p></article>',
                     show_nav=False,
                 ),
                 503,
@@ -1441,9 +1457,19 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     + html.escape(result["handle"], quote=True)
                     + '">'
                     + button("Replace uploaded holdings", cls="button primary")
-                    + '</form><a class="button" href="/connections/?view=companies">Cancel</a></div></article>'
+                    + '</form><a class="button secondary" href="/connections/?view=companies">Cancel</a></div></article>'
                 )
-                return _hub_html(hub_page("Review holdings import", body, active_view="companies"))
+                account_label = info.get("displayName") or info.get("email") or ""
+                return _hub_html(
+                    hub_page(
+                        "Review holdings import",
+                        body,
+                        intro="Check what will change before replacing your uploaded holdings.",
+                        active_view="companies",
+                        account_label=account_label,
+                        suite=_suite_for(request),
+                    )
+                )
             elif action == "import-apply":
                 interests.apply(settings, person, str(form.get("handle", "")))
                 json_extra = {"message": "Uploaded holdings replaced."}
@@ -1468,6 +1494,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     hub_page(
                         "Access unavailable",
                         '<article class="panel"><p>' + html.escape(str(exc)) + "</p></article>",
+                        show_nav=False,
                     ),
                     403,
                 )
@@ -1493,8 +1520,9 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     "Please review your change",
                     '<article class="panel"><p>'
                     + html.escape(str(exc))
-                    + f'</p><p><a class="button" href="{back_href}">Return to Earnings</a></p></article>',
+                    + f'</p><div class="actions-row"><a class="button primary" href="{back_href}">Return to Earnings Watch</a></div></article>',
                     active_view=back_view if back_view in _VIEWS else "upcoming",
+                    show_nav=False,
                 ),
                 409,
             )
@@ -1511,7 +1539,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             return _hub_html(
                 hub_page(
                     "Could not save right now",
-                    "<p>Refresh the page and try again. Your existing preferences are retained.</p>",
+                    '<article class="panel"><p>Refresh the page and try again. Your existing preferences are retained.</p></article>',
                     show_nav=False,
                 ),
                 503,

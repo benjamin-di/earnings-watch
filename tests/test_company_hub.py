@@ -501,7 +501,7 @@ async def test_ui_csp_zero_app_scripts_news_hiding_and_zero_holdings_leak(seeded
         companies_without_datalist = re.sub(
             r'<datalist id="companies">.*?</datalist>', "", companies, flags=re.S
         )
-        assert "Portfolio Holdings" not in companies_without_datalist
+        assert "Portfolio holdings" not in companies_without_datalist
         assert "ALPHA" not in companies_without_datalist
         assert "BETA" in companies_without_datalist
         assert 'popovertarget="import-csv-popover"' not in companies
@@ -509,8 +509,8 @@ async def test_ui_csp_zero_app_scripts_news_hiding_and_zero_holdings_leak(seeded
         assert "news-mute" not in companies
 
         digests = (await client.get("/connections/?view=digests")).text
-        assert "Earnings Alerts" in digests
-        assert "Company News Digest" not in digests
+        assert "Earnings alerts" in digests
+        assert "Company news digest" not in digests
 
         calendar_html = (await client.get("/connections/?view=calendar")).text
         assert 'popovertarget="reset-feed-popover"' in calendar_html
@@ -537,14 +537,14 @@ async def test_ui_csp_zero_app_scripts_news_hiding_and_zero_holdings_leak(seeded
         ) as client,
     ):
         companies_on = (await client.get("/connections/?view=companies")).text
-        assert "Portfolio Holdings" in companies_on
+        assert "Portfolio holdings" in companies_on
         assert "ALPHA" in companies_on
         assert 'popovertarget="import-csv-popover"' in companies_on
         assert 'id="import-csv-popover" popover' in companies_on
         assert "/connections/news-mute" in companies_on
 
         digests_on = (await client.get("/connections/?view=digests")).text
-        assert "Company News Digest" in digests_on
+        assert "Company news digest" in digests_on
         assert "Paused until 2099-01-15" in digests_on
         assert format_utc_slot(23, 30, "Asia/Hong_Kong", ref_date=date(2026, 11, 26)) in digests_on
         assert format_utc_slot(11, 30, "Asia/Hong_Kong", ref_date=date(2026, 11, 26)) in digests_on
@@ -944,7 +944,7 @@ async def test_calendar_outlook_links_timezone_select_and_new_company_onboarding
 
         companies_after = (await client.get("/connections/?view=companies")).text
         assert "NewCo Synthetic" in companies_after
-        assert "Discovering..." in companies_after
+        assert "Discovering…" in companies_after
 
         # Untracked multi-word name without ticker/ISIN gives actionable message and returns to companies view.
         rev2 = accounts.profile(seeded.db, "alice")["revision"]
@@ -1116,7 +1116,7 @@ async def test_digests_delivery_history_isolation_and_brief_preview(seeded):
         digests = await client.get("/connections/?view=digests")
         assert digests.status_code == 200
         assert "Preview next brief" in digests.text
-        assert "Recent Earnings Deliveries" in digests.text
+        assert "Recent deliveries" in digests.text
         # Active unknown delivery must remain visible at top even with 20 sent rows.
         assert "brief:2026-11-26" in digests.text
         assert "Waiting review" in digests.text
@@ -1128,7 +1128,7 @@ async def test_digests_delivery_history_isolation_and_brief_preview(seeded):
         seen_before = accounts.profile(seeded.db, "alice")["seen_seq"]
         preview = await client.get("/connections/?view=preview")
         assert preview.status_code == 200
-        assert "Back to Digests" in preview.text
+        assert "Back to digests" in preview.text
         assert "hub-preview-text" in preview.text
         # Holding-only event, document, and revision must NEVER leak when portfolio_admitted=False.
         assert "HOLDCO" not in preview.text

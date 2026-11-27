@@ -505,7 +505,7 @@ requires-dist = [
     { name = "pypdf", specifier = ">=5,<7" },
     { name = "python-multipart", specifier = ">=0.0.20,<1" },
     { name = "pyyaml", specifier = ">=6,<7" },
-    { name = "signin-window", extras = ["oidc"], specifier = "==0.4.17" },
+    { name = "signin-window", extras = ["oidc"], specifier = ">=0.14.0,<0.15" },
     { name = "tzdata", specifier = ">=2024.1" },
 ]
 
@@ -1709,16 +1709,16 @@ wheels = [
 
 [[package]]
 name = "signin-window"
-version = "0.4.17"
+version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "starlette" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7e/57/cbb5a498521fbd0d72a057dfa80fc4d449060754fab574ca6284bb31d75d/signin_window-0.4.17.tar.gz", hash = "sha256:8be95e18f9ff2a4487332883785720d8e5ee219a7912116ad49ca05d6056d646", size = 266573, upload-time = "2026-10-30T16:48:37.817Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ae/23/f06fe8eab34dc5b4ba924f0b201efe5f84bd8a5d15737a95282c31c36c32/signin_window-0.14.0.tar.gz", hash = "sha256:c56e64c3072e1f1e36d6c463ccc2b76fd702054019be85e9f6e8b70ad0723f02", size = 391510, upload-time = "2026-11-27T06:03:17.977Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/aa/24/859b4accf31a343e6aa20e18afd6a5c84632840e577be467b1090f807a8a/signin_window-0.4.17-py3-none-any.whl", hash = "sha256:135f4c073409fc82c930f2703525aa0725f37ee90ff36f9d367e33d730259bf0", size = 128879, upload-time = "2026-10-30T16:48:36.742Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/86/244865d49ab84ffff4b4a3dd609703f8ed6b956c141c76189d7d5672e3ec/signin_window-0.14.0-py3-none-any.whl", hash = "sha256:b2ca5866074fccee1dfa5a17e203f81aed0349eb8c2f69f915e238081ccd3194", size = 183642, upload-time = "2026-11-27T06:03:16.845Z" },
 ]
 
 [package.optional-dependencies]
