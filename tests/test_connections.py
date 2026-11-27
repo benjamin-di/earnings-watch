@@ -451,3 +451,192 @@ async def test_monitor_has_no_personal_surface_and_requires_backend_key(seeded, 
             headers=headers,
         )
         assert denied.json().get("error") or denied.json().get("result", {}).get("isError")
+
+
+def test_format_event_title_and_summary_avoid_slug_duplication():
+    from earnings_watch.presentation import format_event_summary, format_event_title
+
+    assert format_event_summary("2027-dividend", "dividend") == "2027 Dividend"
+    assert format_event_title("SYN1", "2027-dividend", "dividend") == "SYN1 · 2027 Dividend"
+    assert format_event_summary("2026", "agm") == "2026 AGM"
+    assert format_event_title("SYN2", "2026", "agm") == "SYN2 · 2026 AGM"
+    assert format_event_title("ALPHA", "2026Q4", "earnings") == "ALPHA · 2026Q4 Results"
+    assert format_event_summary("2026-investor-day", "investor-day") == "2026 Investor Day"
+
+
+async def test_hub_ui_deduplication_mark_seen_json_revisions_and_static_assets(seeded):
+    from conftest import event
+    from earnings_watch.store.database import sync_holdings
+
+    seeded.integrations.news_digest.enabled = True
+    today = datetime.now(timezone.utc).date()
+    cat = Catalogue(seeded.db)
+    cat.commit_issuer(
+        "alpha",
+        [
+            event(
+                "alpha",
+                "ALPHA",
+                id="dividend:alpha:2027-dividend",
+                type="dividend",
+                period="2027-dividend",
+                date=today,
+            )
+        ],
+        run_id="div-1",
+    )
+    # Alice holds ALPHA:XNAS AND also added ALPHA:XNAS to watchlist -> must merge into 1 row.
+    sync_holdings(seeded.db, "alice", "portfolio", [{"ticker": "ALPHA", "exchange": "XNAS"}])
+    PersonalStore(seeded.db, "alice").watch("ALPHA", "XNAS")
+
+    auth = browser(seeded)
+    app = create_app(seeded, auth=auth, directory=Directory())
+    async with (
+        app.earnings_app.router.lifespan_context(app.earnings_app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            cookies={auth.cookie: "a" * 43},
+        ) as client,
+    ):
+        # 1. Static assets serve cleanly with immutable cache & single nosniff; unknown paths 404.
+        css_resp = await client.get("/connections/assets/app.css")
+        assert css_resp.status_code == 200
+        assert "text/css" in css_resp.headers["content-type"]
+        assert css_resp.headers.get_list("x-content-type-options") == ["nosniff"]
+        assert css_resp.headers.get_list("cache-control") == ["public, max-age=31536000, immutable"]
+        assert "content-security-policy" not in css_resp.headers
+        js_resp = await client.get("/connections/assets/app.js")
+        assert js_resp.status_code == 200
+        assert "Link copied" in js_resp.text
+        assert "Code copied" not in js_resp.text
+        assert (await client.get("/connections/assets/secret.py")).status_code == 404
+
+        # 2. Upcoming GET renders clean summary without duplicating ticker, keeps single no-referrer,
+        # and does NOT auto-wipe Changed badge on reload.
+        first = await client.get("/connections/?view=upcoming")
+        assert first.status_code == 200
+        assert first.headers.get_list("referrer-policy") == ["no-referrer"]
+        assert first.headers.get_list("cache-control") == ["no-store"]
+        assert '<span class="event-summary">2027 Dividend</span>' in first.text
+        assert "2027-dividend dividend" not in first.text
+        assert 'data-badge="changed"' in first.text
+        second = await client.get("/connections/?view=upcoming")
+        assert 'data-badge="changed"' in second.text
+
+        # Explicit POST /connections/mark-seen clears Changed badge via JSON.
+        rev = accounts.profile(seeded.db, "alice")["revision"]
+        seen_resp = await client.post(
+            "/connections/mark-seen",
+            data={"revision": str(rev), "view": "upcoming"},
+            headers={"Origin": "http://localhost", "Accept": "application/json"},
+        )
+        assert seen_resp.status_code == 200
+        assert seen_resp.json()["ok"] is True
+        third = await client.get("/connections/?view=upcoming")
+        assert 'data-badge="changed"' not in third.text
+
+        # 3. Companies tab merges overlapping Holding + Watchlist into a single company-row
+        # with formatted next-event summary (not raw slug).
+        companies = await client.get("/connections/?view=companies")
+        assert companies.status_code == 200
+        assert companies.text.count('class="company-row"') == 1
+        assert "· 2027 Dividend</p>" in companies.text
+        assert "2027-dividend" not in companies.text
+        assert 'id="company-search"' in companies.text
+        assert 'id="company-filter"' in companies.text
+
+        # 4. Consecutive JSON mutations return incremented revision so rapid toggles never 409.
+        r1 = await client.post(
+            "/connections/mute",
+            data={"revision": str(rev), "ticker": "ALPHA", "exchange": "XNAS", "view": "companies"},
+            headers={"Origin": "http://localhost", "Accept": "application/json"},
+        )
+        assert r1.status_code == 200
+        d1 = r1.json()
+        assert d1["ok"] is True and d1["muted"] is True and d1["revision"] == rev + 1
+
+        r2 = await client.post(
+            "/connections/news-mute",
+            data={
+                "revision": str(d1["revision"]),
+                "ticker": "ALPHA",
+                "exchange": "XNAS",
+                "view": "companies",
+            },
+            headers={"Origin": "http://localhost", "Accept": "application/json"},
+        )
+        assert r2.status_code == 200
+        d2 = r2.json()
+        assert d2["ok"] is True and d2["muted"] is True and d2["revision"] == rev + 2
+
+        # Wildcard mute + exact unmute must signal reload & keep muted=True (never lie "On").
+        accounts.mute(seeded.db, "alice", "ALPHA", "", True, revision=d2["revision"])
+        rev_wc = accounts.profile(seeded.db, "alice")["revision"]
+        r_exact = await client.post(
+            "/connections/unmute",
+            data={
+                "revision": str(rev_wc),
+                "ticker": "ALPHA",
+                "exchange": "XNAS",
+                "view": "companies",
+            },
+            headers={"Origin": "http://localhost", "Accept": "application/json"},
+        )
+        assert r_exact.status_code == 200
+        d_exact = r_exact.json()
+        assert d_exact["ok"] is True and d_exact["muted"] is True and d_exact["reload"] is True
+        r_wc = await client.post(
+            "/connections/unmute",
+            data={
+                "revision": str(d_exact["revision"]),
+                "ticker": "ALPHA",
+                "exchange": "",
+                "view": "companies",
+            },
+            headers={"Origin": "http://localhost", "Accept": "application/json"},
+        )
+        assert r_wc.status_code == 200
+        d_wc = r_wc.json()
+        assert d_wc["ok"] is True and d_wc["muted"] is False and d_wc["reload"] is True
+
+        # Stale revision returns inline JSON 409 error when Accept: application/json.
+        stale = await client.post(
+            "/connections/unmute",
+            data={"revision": str(rev), "ticker": "ALPHA", "exchange": "XNAS", "view": "companies"},
+            headers={"Origin": "http://localhost", "Accept": "application/json"},
+        )
+        assert stale.status_code == 409
+        assert stale.json()["ok"] is False
+        assert "Refresh" in stale.json()["error"]
+
+        # 5. Digests tab renders 00:00-23:00 hour select and saves both sections in one POST.
+        digests = await client.get("/connections/?view=digests")
+        assert '<select id="pref-hour" name="hour" required>' in digests.text
+        assert '<option value="8" selected>08:00</option>' in digests.text
+        save_resp = await client.post(
+            "/connections/preferences",
+            data={
+                "revision": str(d_wc["revision"]),
+                "view": "digests",
+                "section": "all",
+                "results": "on",
+                "weekly_brief": "on",
+                "hour": "9",
+                "timezone": "Asia/Hong_Kong",
+                "news_digest": "on",
+                "news_cadence": "slot_a",
+                "news_weekdays_only": "on",
+                "news_scope": "holdings",
+            },
+            headers={"Origin": "http://localhost", "Accept": "application/json"},
+        )
+        assert save_resp.status_code == 200
+        assert save_resp.json()["ok"] is True
+        prof_after = accounts.profile(seeded.db, "alice")
+        assert prof_after["timezone"] == "Asia/Hong_Kong"
+        assert prof_after["settings"]["hour"] == 9
+        assert prof_after["settings"]["weekly_brief"] is True
+        assert prof_after["settings"]["news_digest"] is True
+        assert prof_after["settings"]["news_cadence"] == "slot_a"
+        assert prof_after["settings"]["news_scope"] == "holdings"

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.6.0] - 2026-11-27
+
+### Added
+
+- Owned `1080px` responsive Earnings Watch web shell (`ui.hub_page`) with external `/connections/assets/{app.css,app.js}` under strict `script-src 'self'; style-src 'self'` CSP, preserving `BrowserAuth` for OIDC, cookies, and origin verification.
+- Unified Companies list merging overlapping portfolio holdings and watchlist entries by `(ticker, exchange)` into responsive card rows with instant client-side search and `All / Portfolio Holdings / Watchlist / Muted` filtering.
+- Progressive-enhancement JSON mutations (`Accept: application/json`) that sync every `input[name="revision"]` in the DOM, preserve scroll position, show live status updates and inline errors, and retain full no-JS `303`/`409` HTML form fallbacks.
+
+### Fixed
+
+- Clean up event titles and summaries (`2027 Dividend`, `2026 AGM`, `Q4 Results`) to eliminate redundant period/type repetition.
+- Stop auto-clearing `seen_seq` on `Upcoming` GET so `Changed` badges persist across refreshes until explicitly acknowledged via `Mark changes seen`.
+- Fix mobile (`<= 640px`) company row wrapping, unify `Digests & Alerts` into a single `Save preferences` form with a `00:00`–`23:00` hour selector, and confirm calendar link copies with `"Link copied"`.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.5.3, 0.5.2, 0.5.1, 0.5.0, 0.4.4, 0.4.3, 0.4.2, 0.4.1, 0.4.0, and 0.3.3; no schema change.
+
+[0.6.0]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.6.0
+
 ## [0.5.3] - 2026-11-26
 
 ### Fixed

@@ -75,7 +75,7 @@ def assert_footer(source, build):
     assert footer.details == 1
     assert "".join(footer.code) == build.source_revision
     assert "Source revision: " in "".join(footer.text)
-    assert "user-select:text" in source
+    assert "user-select:text" in source or "/connections/assets/app.css" in source
 
 
 @pytest.mark.parametrize("revision", ["a" * 40, "b" * 64, "unknown"])

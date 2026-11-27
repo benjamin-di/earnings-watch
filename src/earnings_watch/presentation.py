@@ -3,10 +3,50 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from .store.accounts import effective_follows, profile
+
+_TYPE_LABELS = {
+    "earnings": "Results",
+    "agm": "AGM",
+    "dividend": "Dividend",
+    "capital-markets-day": "Capital Markets Day",
+    "investor-day": "Investor Day",
+    "trading-update": "Trading Update",
+    "sales-update": "Sales Update",
+    "production-report": "Production Report",
+    "shareholder-meeting": "Shareholder Meeting",
+}
+
+
+def format_event_summary(period: str, event_type: str) -> str:
+    """Format a human-readable event summary without redundant period/type repetition."""
+    raw_type = (event_type or "").strip().lower()
+    type_label = _TYPE_LABELS.get(raw_type) or raw_type.replace("-", " ").title()
+    clean_period = (period or "").strip()
+    if clean_period and raw_type:
+        # Strip trailing redundant type suffix from period slugs like "2027-dividend" or "2026-agm".
+        suffix = re.escape(raw_type).replace(r"\-", r"[\s_-]+")
+        stripped = re.sub(rf"(?:[\s_-]+|^){suffix}$", "", clean_period, flags=re.IGNORECASE).strip()
+        if stripped:
+            clean_period = stripped
+        elif clean_period.lower().replace("_", "-") == raw_type:
+            clean_period = ""
+    if clean_period and type_label:
+        return f"{clean_period} {type_label}"
+    return clean_period or type_label
+
+
+def format_event_title(ticker: str, period: str, event_type: str) -> str:
+    """Format a scannable event title such as 'ALPHA · 2027 Dividend' or 'BETA · 2026 AGM'."""
+    summary = format_event_summary(period, event_type)
+    clean_ticker = (ticker or "").strip()
+    if clean_ticker and summary:
+        return f"{clean_ticker} · {summary}"
+    return clean_ticker or summary
 
 
 def present(event, person, library, *, sources_by_key: dict[str, Any] | None = None):
@@ -40,13 +80,11 @@ def present(event, person, library, *, sources_by_key: dict[str, Any] | None = N
         sources_by_key = {s.key: s for s in library.sources()}
     source = sources_by_key.get(event["issuer_key"])
     company_name = source.name if source is not None else event["ticker"]
+    summary = format_event_summary(event["period"], event["type"])
     data.update(
         company_name=company_name,
-        title=event["ticker"]
-        + " "
-        + event["period"]
-        + " "
-        + ("results" if event["type"] == "earnings" else event["type"].replace("-", " ")),
+        summary=summary,
+        title=format_event_title(event["ticker"], event["period"], event["type"]),
         when=when,
         certainty=certainty,
         why_followed=sorted(

@@ -1,7 +1,5 @@
 """Regressions for notification progress, current interests and account removal."""
 
-import base64
-import hashlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -151,12 +149,11 @@ async def test_copy_uses_only_the_allowed_connections_script(seeded):
     ):
         response = await client.get("/connections/?view=calendar")
     assert 'data-copy-code="calendar-link"' in response.text
-    scripts = re.findall(r"<script>(.*?)</script>", response.text, re.S)
-    assert scripts
+    assert "/connections/assets/app.js" in response.text
+    assert not re.findall(r"<script(?:\s[^>]*)?>[^<]+</script>", response.text, re.I)
     csp = response.headers["content-security-policy"]
-    for script in scripts:
-        needed = "sha256-" + base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
-        assert needed in csp
+    assert "script-src 'self'" in csp
+    assert "style-src 'self'" in csp
 
 
 async def test_native_reconciliation_proof_is_person_key_and_attempt_bound(seeded):

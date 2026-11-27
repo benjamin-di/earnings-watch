@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import base64
 from datetime import date, datetime, timedelta, timezone
-import hashlib
 import os
 import re
 
@@ -483,19 +481,15 @@ async def test_ui_csp_zero_app_scripts_news_hiding_and_zero_holdings_leak(seeded
         for view in ("upcoming", "companies", "digests", "calendar"):
             resp = await client.get(f"/connections/?view={view}")
             assert resp.status_code == 200
-            assert "max-width:1080px" in resp.text
-            # Zero app-injected <script> tags: every <script> must be in signin-window's CSP hash.
-            content_match = re.search(
-                r'<div id="connection-content"[^>]*>(.*?)</div></main>', resp.text, re.S
-            )
-            assert content_match is not None
-            assert "<script" not in content_match.group(1).lower()
+            assert "/connections/assets/app.css" in resp.text
+            assert "/connections/assets/app.js" in resp.text
+            # Zero inline <script> or <style> tags; strict external-asset CSP.
+            assert not re.findall(r"<script(?:\s[^>]*)?>[^<]+</script>", resp.text, re.I)
+            assert "<style" not in resp.text.lower()
             csp = resp.headers["content-security-policy"]
-            for script in re.findall(r"<script>(.*?)</script>", resp.text, re.S):
-                needed = (
-                    "sha256-" + base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
-                )
-                assert needed in csp
+            assert "script-src 'self'" in csp
+            assert "style-src 'self'" in csp
+            assert "'unsafe-inline'" not in csp
 
         # Non-portfolio-admitted user must NEVER see holdings HTML on any tab.
         upcoming = (await client.get("/connections/?view=upcoming")).text
