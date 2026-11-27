@@ -15,7 +15,15 @@ def escape(value: str) -> str:
 
 
 def render(events: list[dict[str, Any]]) -> str:
-    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Earnings Watch//EN", "CALSCALE:GREGORIAN"]
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Earnings Watch//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "NAME:Earnings Watch",
+        "X-WR-CALNAME:Earnings Watch",
+    ]
     for entry in desired(events):
         lines.extend(
             [

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.1] - 2026-11-27
+
+### Fixed
+
+- Add `METHOD:PUBLISH`, `NAME:Earnings Watch`, and `X-WR-CALNAME:Earnings Watch` to rendered `.ics` feeds plus `Content-Disposition: inline; filename="earnings-watch.ics"` on `/calendar/{token}.ics` so calendar apps display `Earnings Watch` instead of the raw 64-character feed token.
+- Remove the broken `Add to Outlook` web deep link (`outlook.live.com` fails for Microsoft 365 accounts and `jsmvvmdeeplink` drops `rru=addsubscription` across auth redirects), leaving the reliable copyable `https://` link (with a short Outlook **Add calendar → Subscribe from web** hint on Windows) and the `webcal://` button on macOS/iOS/other platforms.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 0.6.0, 0.5.3, 0.5.2, 0.5.1, 0.5.0, 0.4.4, 0.4.3, 0.4.2, 0.4.1, 0.4.0, and 0.3.3; no schema change.
+
+[0.6.1]: https://github.com/benjamin-di/earnings-watch/releases/tag/v0.6.1
+
 ## [0.6.0] - 2026-11-27
 
 ### Added

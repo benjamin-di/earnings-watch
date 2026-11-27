@@ -897,15 +897,12 @@ async def test_calendar_outlook_links_timezone_select_and_new_company_onboarding
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        # 1. Calendar tab: Outlook subscribe deep link uses rru=addsubscription (not broken addcalendar).
+        # 1. Calendar tab: no broken Outlook web deep link; non-Windows keeps webcal:// subscribe button.
         cal_html = (await client.get("/connections/?view=calendar")).text
         assert "/calendar/0/addcalendar" not in cal_html
-        assert (
-            "https://outlook.live.com/owa/?path=/calendar/action/compose&amp;rru=addsubscription&amp;url="
-            in cal_html
-        )
+        assert "outlook.live.com" not in cal_html
+        assert "Add to Outlook" not in cal_html
         assert "webcal://earnings.example.com/calendar/" in cal_html
-        assert 'target="_blank"' in cal_html
 
         # 2. Digests tab: Timezone is a <select> with full IANA options (not <input list> locked to HK).
         digests_html = (await client.get("/connections/?view=digests")).text
@@ -1161,7 +1158,7 @@ async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        # 1. Windows via Chromium Client Hints: no webcal:// button; Outlook.com + copyable HTTPS link present.
+        # 1. Windows via Chromium Client Hints: no webcal:// or broken Add to Outlook button; copyable HTTPS link present.
         win_ch = (
             await client.get(
                 "/connections/?view=calendar",
@@ -1173,10 +1170,8 @@ async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
         ).text
         assert "webcal://" not in win_ch
         assert "Subscribe in calendar app" not in win_ch
-        assert (
-            "https://outlook.live.com/owa/?path=/calendar/action/compose&amp;rru=addsubscription&amp;url="
-            in win_ch
-        )
+        assert "outlook.live.com" not in win_ch
+        assert "Add to Outlook" not in win_ch
         assert '<code id="calendar-link">https://earnings.example.com/calendar/' in win_ch
         assert "Subscribe from web" in win_ch
 
@@ -1191,6 +1186,7 @@ async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
         ).text
         assert "webcal://" not in win_ua
         assert "Subscribe in calendar app" not in win_ua
+        assert "Add to Outlook" not in win_ua
 
         # 3. macOS / iOS keep the standard webcal:// button for Apple Calendar.
         mac_html = (
@@ -1204,3 +1200,14 @@ async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
         ).text
         assert "webcal://earnings.example.com/calendar/" in mac_html
         assert "Subscribe in calendar app" in mac_html
+        assert "Add to Outlook" not in mac_html
+
+        # 4. ICS feed sets friendly calendar name headers and properties instead of raw token filename.
+        token_match = re.search(r"/calendar/([a-f0-9]{64})\.ics", win_ch)
+        assert token_match is not None
+        ics_resp = await client.get(f"/calendar/{token_match.group(1)}.ics")
+        assert ics_resp.status_code == 200
+        assert 'filename="earnings-watch.ics"' in ics_resp.headers["content-disposition"]
+        assert "METHOD:PUBLISH" in ics_resp.text
+        assert "NAME:Earnings Watch" in ics_resp.text
+        assert "X-WR-CALNAME:Earnings Watch" in ics_resp.text

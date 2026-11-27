@@ -9,7 +9,6 @@ import html
 from importlib import resources
 import json
 import os
-from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from signin_window.oidc import BrowserAuth, OIDCConfig
@@ -1011,22 +1010,18 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
     def _render_calendar_tab(service, profile, *, is_windows: bool = False) -> str:
         token = accounts.feed_token(settings.db, profile["person"], service.signing_key)
         link = settings.public_url.rstrip("/") + "/calendar/" + token + ".ics"
-        encoded_link = quote(link, safe="")
-        outlook_live = (
-            "https://outlook.live.com/owa/?path=/calendar/action/compose"
-            f"&rru=addsubscription&url={encoded_link}&name=Earnings"
-        )
-        webcal_btn = ""
+        actions_row = ""
         if link.startswith("https://") and not is_windows:
             webcal_link = "webcal://" + link.removeprefix("https://")
-            webcal_btn = (
-                f'<a class="button" href="{html.escape(webcal_link, quote=True)}">'
+            actions_row = (
+                '<div class="actions-row">'
+                f'<a class="button primary" href="{html.escape(webcal_link, quote=True)}">'
                 "Subscribe in calendar app</a>"
+                "</div>"
             )
-        windows_hint = (
+        subscribe_hint = (
             '<p class="help">'
-            "Using New Outlook for Windows? Use <strong>Add to Outlook</strong> "
-            "above, or copy the <code>https://</code> link below into "
+            "In Outlook, copy the private link below and paste it into "
             "<strong>Add calendar &rarr; Subscribe from web</strong>.</p>"
             if is_windows
             else ""
@@ -1035,11 +1030,8 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             '<article class="panel">'
             "<h2>Calendar subscription</h2>"
             '<p class="muted">Subscribe to a read-only calendar of your companies. Calendar apps control refresh timing, which can take hours. Your private link grants access to these events; keep it private.</p>'
-            '<div class="actions-row">'
-            f'<a class="button primary" href="{html.escape(outlook_live, quote=True)}" target="_blank" rel="noopener noreferrer">Add to Outlook</a>'
-            f"{webcal_btn}"
-            "</div>"
-            f"{windows_hint}"
+            f"{actions_row}"
+            f"{subscribe_hint}"
             '<div class="copy-box">'
             '<div class="eyebrow">Private calendar link</div>'
             '<div class="copy-row">'
@@ -1504,9 +1496,10 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             content = open_service(settings, person).calendar_ics(include_holdings=include_holdings)
             return Response(
                 content,
-                media_type="text/calendar",
+                media_type="text/calendar; charset=utf-8",
                 headers={
                     "Cache-Control": "private, no-store",
+                    "Content-Disposition": 'inline; filename="earnings-watch.ics"',
                     "Referrer-Policy": "no-referrer",
                     "X-Content-Type-Options": "nosniff",
                 },
