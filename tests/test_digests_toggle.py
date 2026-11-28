@@ -22,7 +22,7 @@ class _FakeDirectory:
             "id": subject,
             "admitted": True,
             "disabled": False,
-            "email": f"{subject}@example.test",
+            "email": f"{subject}@example.com",
             "displayName": subject.title(),
             "portfolio_admitted": True,
         }
@@ -60,10 +60,10 @@ async def test_digests_tab_false_hides_nav_redirects_and_supports_inline_timezon
         public_url="http://localhost",
         allowed_hosts=["localhost"],
         digests_tab=False,
-        digests_external_url="https://briefs.connect.dickgiesser.net",
+        digests_external_url="https://briefs.example.com",
     )
     initialize(settings.db)
-    accounts.provision(settings.db, "alice", "alice@example.test")
+    accounts.provision(settings.db, "alice", "alice@example.com")
     auth = _make_auth(settings)
     app = create_app(settings, auth=auth, directory=_FakeDirectory())
 
@@ -80,7 +80,7 @@ async def test_digests_tab_false_hides_nav_redirects_and_supports_inline_timezon
         assert "Digests &amp; alerts" not in home.text
         assert 'href="/?view=digests"' not in home.text
         assert 'name="section" value="timezone"' in home.text
-        assert "https://briefs.connect.dickgiesser.net" in home.text
+        assert "https://briefs.example.com" in home.text
 
         r_dig = await client.get("/?view=digests", follow_redirects=False)
         assert r_dig.status_code == 303
@@ -113,7 +113,7 @@ async def test_digests_tab_true_default_preserves_standalone_ui(tmp_path: Path) 
         digests_tab=True,
     )
     initialize(settings.db)
-    accounts.provision(settings.db, "alice", "alice@example.test")
+    accounts.provision(settings.db, "alice", "alice@example.com")
     auth = _make_auth(settings)
     app = create_app(settings, auth=auth, directory=_FakeDirectory())
 
@@ -137,7 +137,7 @@ async def test_digests_tab_true_default_preserves_standalone_ui(tmp_path: Path) 
 def test_notify_prepare_honors_pref_overrides(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path)
     initialize(settings.db)
-    accounts.provision(settings.db, "alice", "alice@example.test")
+    accounts.provision(settings.db, "alice", "alice@example.com")
     cat = Catalogue(settings.db)
     cat.put_source(source(key="alpha", ticker="ALPHA", exchange="XNAS"))
     ev = event(key="alpha", ticker="ALPHA")
