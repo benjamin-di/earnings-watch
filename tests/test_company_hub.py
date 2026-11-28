@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import html
 import os
 import re
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -897,11 +899,14 @@ async def test_calendar_outlook_links_timezone_select_and_new_company_onboarding
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        # 1. Calendar tab: no broken Outlook web deep link; non-Windows keeps webcal:// subscribe button.
+        # 1. Calendar tab: work Outlook addfromweb link only; non-Windows keeps webcal:// subscribe button.
         cal_html = (await client.get("/?view=calendar")).text
         assert "/calendar/0/addcalendar" not in cal_html
         assert "outlook.live.com" not in cal_html
-        assert "Add to Outlook" not in cal_html
+        assert (
+            "https://outlook.office.com/calendar/0/addfromweb?url=https%3A%2F%2Fearnings.example.com%2Fcalendar%2F"
+            in cal_html
+        )
         assert "webcal://earnings.example.com/calendar/" in cal_html
 
         # 2. Digests tab: Timezone is a <select> with full IANA options (not <input list> locked to HK).
@@ -1142,6 +1147,32 @@ async def test_digests_delivery_history_isolation_and_brief_preview(seeded):
 
 
 @pytest.mark.asyncio
+async def test_calendar_tab_omits_outlook_link_without_https(seeded):
+    """Outlook cannot subscribe to a non-HTTPS feed; fall back to the manual copy hint."""
+    auth = _browser(seeded, "alice")
+    seeded.public_url = "http://localhost"
+    directory = _Directory(
+        {"alice": {"admitted": True, "disabled": False, "portfolio_admitted": True}}
+    )
+    app = create_app(seeded, auth=auth, directory=directory)
+    async with (
+        app.earnings_app.router.lifespan_context(app.earnings_app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            cookies={auth.cookie: "a" * 43},
+        ) as client,
+    ):
+        page = (
+            await client.get("/?view=calendar", headers={"Sec-CH-UA-Platform": '"Windows"'})
+        ).text
+        assert "Add to Outlook" not in page
+        assert "outlook.office.com" not in page
+        assert "Subscribe from web" in page
+        assert '<code id="calendar-link">http://localhost/calendar/' in page
+
+
+@pytest.mark.asyncio
 async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
     """Windows New Outlook strips webcal: to //host/... (Invalid URL); omit webcal:// on Windows."""
     auth = _browser(seeded, "alice")
@@ -1158,7 +1189,7 @@ async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
             cookies={auth.cookie: "a" * 43},
         ) as client,
     ):
-        # 1. Windows via Chromium Client Hints: no webcal:// or broken Add to Outlook button; copyable HTTPS link present.
+        # 1. Windows via Chromium Client Hints: no webcal://; one-click work Outlook link and copyable HTTPS link.
         win_ch = (
             await client.get(
                 "/?view=calendar",
@@ -1171,9 +1202,25 @@ async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
         assert "webcal://" not in win_ch
         assert "Subscribe in calendar app" not in win_ch
         assert "outlook.live.com" not in win_ch
-        assert "Add to Outlook" not in win_ch
         assert '<code id="calendar-link">https://earnings.example.com/calendar/' in win_ch
-        assert "Subscribe from web" in win_ch
+        outlook_href = re.search(
+            r'<a class="button primary" href="([^"]+)" target="_blank" rel="noopener noreferrer">Add to Outlook</a>',
+            win_ch,
+        )
+        assert outlook_href is not None
+        outlook_url = urlsplit(html.unescape(outlook_href.group(1)))
+        assert (outlook_url.netloc, outlook_url.path) == (
+            "outlook.office.com",
+            "/calendar/0/addfromweb",
+        )
+        outlook_query = parse_qs(outlook_url.query)
+        feed_link = re.search(r'<code id="calendar-link">([^<]+)</code>', win_ch)
+        assert feed_link is not None
+        assert outlook_query == {
+            "url": [html.unescape(feed_link.group(1))],
+            "name": ["Earnings Watch"],
+        }
+        assert "name=Earnings%20Watch" in outlook_url.query
 
         # 2. Windows via User-Agent only (e.g. Firefox without Sec-CH-UA-Platform).
         win_ua = (
@@ -1186,7 +1233,10 @@ async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
         ).text
         assert "webcal://" not in win_ua
         assert "Subscribe in calendar app" not in win_ua
-        assert "Add to Outlook" not in win_ua
+        assert (
+            '<a class="button primary" href="https://outlook.office.com/calendar/0/addfromweb?url=https%3A%2F%2Fearnings.example.com%2Fcalendar%2F'
+            in win_ua
+        )
 
         # 3. macOS / iOS keep the standard webcal:// button for Apple Calendar.
         mac_html = (
@@ -1200,7 +1250,10 @@ async def test_calendar_tab_omits_broken_webcal_on_windows(seeded):
         ).text
         assert "webcal://earnings.example.com/calendar/" in mac_html
         assert "Subscribe in calendar app" in mac_html
-        assert "Add to Outlook" not in mac_html
+        assert (
+            '<a class="button secondary" href="https://outlook.office.com/calendar/0/addfromweb?url=https%3A%2F%2Fearnings.example.com%2Fcalendar%2F'
+            in mac_html
+        )
 
         # 4. ICS feed sets friendly calendar name headers and properties instead of raw token filename.
         token_match = re.search(r"/calendar/([a-f0-9]{64})\.ics", win_ch)

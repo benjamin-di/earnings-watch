@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.15.0] - 2026-11-28
+
+### Added
+- Add a one-click **Add to Outlook** button on the Calendar tab that opens Outlook on the web for work or school accounts (`outlook.office.com/calendar/0/addfromweb`) with the private feed link and the `Earnings Watch` name filled in. It is the primary action on Windows and sits beside the `webcal://` button elsewhere; the copyable link remains. Personal Outlook.com accounts are not targeted.
+
+### Upgrade
+- Action required: none.
+- Rollback: compatible with 0.14.1.
+
 ## [0.14.1] - 2026-11-28
 
 ### Fixed

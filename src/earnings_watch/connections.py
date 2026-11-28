@@ -10,6 +10,7 @@ import html
 from importlib import resources
 import json
 import os
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from signin_window.oidc import BrowserAuth, OIDCConfig
@@ -1168,24 +1169,41 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
     def _render_calendar_tab(service, profile, *, is_windows: bool = False) -> str:
         token = accounts.feed_token(settings.db, profile["person"], service.signing_key)
         link = settings.public_url.rstrip("/") + "/calendar/" + token + ".ics"
-        has_webcal = link.startswith("https://") and not is_windows
-        actions_row = ""
+        is_https = link.startswith("https://")
+        has_webcal = is_https and not is_windows
+        buttons = []
         if has_webcal:
             webcal_link = "webcal://" + link.removeprefix("https://")
-            actions_row = (
-                '<div class="actions-row">'
+            buttons.append(
                 f'<a class="button primary" href="{html.escape(webcal_link, quote=True)}">'
                 "Subscribe in calendar app</a>"
-                "</div>"
             )
-        subscribe_hint = (
-            '<div class="callout info">'
-            "In Outlook, copy the private link below and paste it into "
-            "<strong>Add calendar &rarr; Subscribe from web</strong>.</div>"
-            if is_windows
-            else ""
-        )
-        copy_cls = "button secondary btn-sm" if has_webcal else "button primary btn-sm"
+        if is_https:
+            # Outlook on the web (work or school) opens "Subscribe from web" pre-filled.
+            outlook_link = "https://outlook.office.com/calendar/0/addfromweb?" + urlencode(
+                {"url": link, "name": "Earnings Watch"}, quote_via=quote
+            )
+            outlook_cls = "button secondary" if has_webcal else "button primary"
+            buttons.append(
+                f'<a class="{outlook_cls}" href="{html.escape(outlook_link, quote=True)}"'
+                ' target="_blank" rel="noopener noreferrer">Add to Outlook</a>'
+            )
+        actions_row = '<div class="actions-row">' + "".join(buttons) + "</div>" if buttons else ""
+        if is_https:
+            subscribe_hint = (
+                '<p class="muted small">Add to Outlook opens Outlook on the web for work or '
+                "school accounts with the link filled in; select <strong>Import</strong> to "
+                "finish.</p>"
+            )
+        elif is_windows:
+            subscribe_hint = (
+                '<div class="callout info">'
+                "In Outlook, copy the private link below and paste it into "
+                "<strong>Add calendar &rarr; Subscribe from web</strong>.</div>"
+            )
+        else:
+            subscribe_hint = ""
+        copy_cls = "button secondary btn-sm" if is_https else "button primary btn-sm"
         return (
             '<article class="panel">'
             "<h2>Calendar subscription</h2>"
