@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.11.0] - 2026-11-28
+
+### Added
+
+- Optional `[connections] digests_tab = false` and `digests_external_url` settings to hide the `Digests & alerts` tab and show an inline timezone selector + external link on `Upcoming` (default `digests_tab = true` preserves standalone behavior unchanged).
+- Optional `pref_overrides` parameter on `notify.notices()` and `notify.prepare()` for host runtimes managing subscriptions externally.
+
+### Fixed
+
+- Fall back from MarkitDigital's 5-item-capped ASX JSON feed to ASX's full-year HTML announcements table (`www.asx.com.au`) when no historical results dates are returned, restoring cadence projection for ASX issuers with frequent routine filings.
+- Filter already-covered rejected claims (exact-date matches against verified events, or past-dated claims already covered by a past event) out of `fetch_state.rejected` and sweep errors so redundant unverified claims do not raise false-positive coverage notices or mark sweeps failed.
+- Scope web hub coverage notices to the Upcoming and Companies views rather than Digests & alerts and Calendar.
+
+### Upgrade
+
+- Action required: None.
+- Rollback: Compatible with `0.10.1` with no schema changes.
+
 ## [0.10.1] - 2026-11-27
 
 ### Fixed
