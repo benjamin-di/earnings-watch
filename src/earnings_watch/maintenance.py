@@ -942,7 +942,7 @@ class Maintenance:
                         ir_harvest=_ir_harvest_cb,
                         providers=providers,
                     )
-                    if not docs_only and "generic_ir" in providers:
+                    if not docs_only and extraction_enabled and "generic_ir" in providers:
                         try:
                             ir_found, _ = await harvest_ir_assets(
                                 self.catalogue,
