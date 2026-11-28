@@ -20,6 +20,7 @@ from .engine.verify import check_timing_candidates, rejection_covered, verify_cl
 from .errors import EarningsError
 from .llm.runner import AgentRunner, AgentTask, BudgetRunner, CliRunner
 from .model.events import Event, EventStatus, ExtractResult, TimingSelection
+from .model.sources import FetchStrategy
 from .model.urls import apex_domain
 from .providers.generic_ir import capture
 from .providers.base import BrowserReader
@@ -162,6 +163,35 @@ def _weekly_audit_due(prev_state: dict[str, Any], now: datetime) -> bool:
     return False
 
 
+def _uncovered_rejections(rejected, source, held, today: date):
+    verified_held = [e for e in held if e.status != EventStatus.EXPECTED]
+    return [
+        r
+        for r in rejected
+        if not rejection_covered(
+            r.claim,
+            source,
+            [
+                e
+                for e in verified_held
+                if e.date == r.claim.date or (r.claim.date < today and e.status == EventStatus.PAST)
+            ],
+        )
+    ]
+
+
+def _parse_run_doc(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except ValueError:
+            return {}
+    return {}
+
+
 def _existing_events_summary(events: list[Event]) -> list[dict[str, str]]:
     return [
         {
@@ -293,6 +323,33 @@ class Maintenance:
                     "invalid_argument", "search contains unknown or dormant source keys"
                 )
             sources.sort(key=lambda s: (s.key not in (search or set()), s.key))
+            retry_attempt = 0
+            if not docs_only and not force and not search and last and last.get("exit") != 0:
+                last_doc = _parse_run_doc(last.get("doc"))
+                last_started_raw = last.get("started")
+                recent_failure = False
+                if isinstance(last_started_raw, str) and last_started_raw:
+                    try:
+                        last_started = datetime.fromisoformat(last_started_raw)
+                        if last_started.tzinfo is None:
+                            last_started = last_started.replace(tzinfo=timezone.utc)
+                        recent_failure = datetime.now(timezone.utc) - last_started < timedelta(
+                            hours=20
+                        )
+                    except ValueError:
+                        recent_failure = False
+                if recent_failure and not last_doc.get("aborted"):
+                    failed_keys = {
+                        e["source"]
+                        for e in last_doc.get("errors", [])
+                        if isinstance(e, dict)
+                        and isinstance(e.get("source"), str)
+                        and e.get("reason") != "claims_rejected"
+                    }
+                    all_keys = {s.key for s in sources}
+                    if failed_keys and failed_keys < all_keys:
+                        sources = [s for s in sources if s.key in failed_keys]
+                        retry_attempt = int(last_doc.get("retry_attempt") or 0) + 1
             issuer_hosts = {
                 h.lower()
                 for s in sources
@@ -340,6 +397,8 @@ class Maintenance:
                 counts["calls"] = runner.calls
                 return docs
 
+            consecutive_transport_errors = 0
+            aborted = False
             for source in sources:
                 try:
                     old = [
@@ -348,6 +407,7 @@ class Maintenance:
                         if row["issuer_key"] == source.key
                     ]
                     historical_dates: list[date] = []
+                    waf_blocked = False
                     try:
                         if not docs_only and extraction_enabled and "generic_ir" in providers:
                             from .research import (
@@ -381,13 +441,36 @@ class Maintenance:
                             else:
                                 try:
                                     page = await capture(transport, source.calendar_url)
-                                except Exception:
+                                except Exception as capture_exc:
+                                    http_status = getattr(
+                                        getattr(capture_exc, "response", None), "status_code", 0
+                                    )
+                                    waf_blocked = http_status in {403, 202}
                                     try:
                                         if self.browser is None:
                                             raise ValueError("no browser reader configured")
                                         page = await self.browser.read(source.calendar_url)
+                                        waf_blocked = False
                                     except Exception:
-                                        if runner.remaining:
+                                        _, historical_dates = await _discover_layer1(
+                                            source, transport, settings, today=today
+                                        )
+                                        if (
+                                            waf_blocked
+                                            and prev_state.get("waf_blocked")
+                                            and not dry_run
+                                        ):
+                                            self.catalogue.put_source(
+                                                source.model_copy(
+                                                    update={"fetch": FetchStrategy.WEBSEARCH}
+                                                )
+                                            )
+                                            self.catalogue.set_state(
+                                                "heal_state",
+                                                "source:" + source.key,
+                                                {"state": "active"},
+                                            )
+                                        elif runner.remaining:
                                             from .heal import repair
 
                                             await repair(
@@ -497,35 +580,44 @@ class Maintenance:
                                                 documents=documents,
                                             )
                                 repaired = False
-                                if checked.rejected and runner.remaining:
+                                repair_targets = _uncovered_rejections(
+                                    checked.rejected, source, [*old, *checked.events], today
+                                )
+                                if repair_targets and runner.remaining:
                                     repaired = True
-                                    repaired_res, repair_docs = await repair_rejected(
-                                        source,
-                                        runner,
-                                        checked.rejected,
-                                        documents,
-                                        model=settings.model,
-                                        sec_contact=settings.sec_contact,
-                                    )
-                                    counts["calls"] = runner.calls
-                                    if repaired_res.parsed is not None:
-                                        documents.update(repair_docs)
-                                        repaired_claims = ExtractResult.model_validate(
-                                            repaired_res.parsed
-                                        ).events
-                                        rejected_claim_ids = {id(r.claim) for r in checked.rejected}
-                                        kept_claims = [
-                                            c
-                                            for c in extracted.events
-                                            if id(c) not in rejected_claim_ids
-                                        ]
-                                        checked = verify_claims(
-                                            [*kept_claims, *repaired_claims],
+                                    try:
+                                        repaired_res, repair_docs = await repair_rejected(
                                             source,
-                                            page.text,
-                                            today=today,
-                                            documents=documents,
+                                            runner,
+                                            repair_targets,
+                                            documents,
+                                            model=settings.model,
+                                            sec_contact=settings.sec_contact,
                                         )
+                                        counts["calls"] = runner.calls
+                                        if repaired_res.parsed is not None:
+                                            documents.update(repair_docs)
+                                            repaired_claims = ExtractResult.model_validate(
+                                                repaired_res.parsed
+                                            ).events
+                                            rejected_claim_ids = {
+                                                id(r.claim) for r in repair_targets
+                                            }
+                                            kept_claims = [
+                                                c
+                                                for c in extracted.events
+                                                if id(c) not in rejected_claim_ids
+                                            ]
+                                            checked = verify_claims(
+                                                [*kept_claims, *repaired_claims],
+                                                source,
+                                                page.text,
+                                                today=today,
+                                                documents=documents,
+                                            )
+                                    except Exception:
+                                        # Best-effort repair must never discard already-verified events.
+                                        counts["calls"] = runner.calls
                                 authoritative = (
                                     not researched
                                     and not repaired
@@ -576,26 +668,10 @@ class Maintenance:
                                     merged = sorted(
                                         [*merged, projected], key=lambda item: (item.date, item.id)
                                     )
-                                verified_held = [
-                                    e for e in merged if e.status != EventStatus.EXPECTED
-                                ]
-                                uncovered_rejected = [
-                                    r
-                                    for r in checked.rejected
-                                    if not rejection_covered(
-                                        r.claim,
-                                        source,
-                                        [
-                                            e
-                                            for e in verified_held
-                                            if e.date == r.claim.date
-                                            or (
-                                                r.claim.date < today
-                                                and e.status == EventStatus.PAST
-                                            )
-                                        ],
-                                    )
-                                ]
+                                uncovered_rejected = _uncovered_rejections(
+                                    checked.rejected, source, merged, today
+                                )
+                                consecutive_transport_errors = 0
                                 planned.extend(e.model_dump(mode="json") for e in merged)
                                 counts["events"] += len(merged)
                                 if not dry_run:
@@ -607,6 +683,7 @@ class Maintenance:
                                     )
                                     fetch_doc: dict[str, Any] = {
                                         "last_ok": now.isoformat(),
+                                        "consecutive_failures": 0,
                                         "rejected": [r.reason for r in uncovered_rejected],
                                         "rejected_details": [
                                             {
@@ -634,6 +711,14 @@ class Maintenance:
                                     )
                     except Exception as exc:
                         detail = _safe_error_detail(exc)
+                        is_transport_err = type(exc).__name__ == "NotStarted" or detail in {
+                            "model run failed",
+                            "model run timed out",
+                        }
+                        if is_transport_err:
+                            consecutive_transport_errors += 1
+                        else:
+                            consecutive_transport_errors = 0
                         errors.append(
                             {
                                 "source": source.key,
@@ -670,11 +755,21 @@ class Maintenance:
                             err_doc: dict[str, Any] = {
                                 "error": type(exc).__name__,
                                 "error_detail": detail,
+                                "consecutive_failures": int(
+                                    prev_err_state.get("consecutive_failures") or 0
+                                )
+                                + 1,
                             }
+                            if waf_blocked:
+                                err_doc["waf_blocked"] = True
                             for keep_key in ("last_ok", "last_agent_audit"):
                                 if prev_err_state.get(keep_key):
                                     err_doc[keep_key] = prev_err_state[keep_key]
                             self.catalogue.set_state("fetch_state", source.key, err_doc)
+                        if consecutive_transport_errors >= 3:
+                            aborted = True
+                            counts["sources"] += 1
+                            break
                     from .polling import poll
 
                     counts["documents"] += await poll(
@@ -697,13 +792,17 @@ class Maintenance:
                     )
             counts["calls"] = runner.calls
             exit_code = 3 if any(e.get("reason") != "claims_rejected" for e in errors) else 0
-            response = {
+            response: dict[str, Any] = {
                 "run_id": run_id,
                 "counts": counts,
                 "errors": errors,
                 "exit": exit_code,
                 "dry_run": dry_run,
             }
+            if retry_attempt:
+                response["retry_attempt"] = retry_attempt
+            if aborted:
+                response["aborted"] = True
             if dry_run:
                 response["planned_events"] = planned
             else:

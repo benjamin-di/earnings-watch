@@ -205,7 +205,7 @@ async def repair_rejected(
                 schema=ExtractResult,
                 max_turns=4,
                 model=model,
-                allow_repair=False,
+                allow_repair=True,
             ),
             research_config=config,
         )

@@ -424,6 +424,28 @@ class PersonService:
                         "message": f"{ticker}: {len(rejected)} claim(s) rejected in latest check",
                     }
                 )
+
+            if fstate.get("error") and int(fstate.get("consecutive_failures") or 0) >= 3:
+                last_ok_raw = fstate.get("last_ok")
+                stale = True
+                if isinstance(last_ok_raw, str) and last_ok_raw:
+                    try:
+                        last_ok_dt = datetime.fromisoformat(last_ok_raw)
+                        if last_ok_dt.tzinfo is None:
+                            last_ok_dt = last_ok_dt.replace(tzinfo=timezone.utc)
+                        stale = (now - last_ok_dt) > timedelta(hours=72)
+                    except ValueError:
+                        stale = True
+                if stale:
+                    detail = str(fstate.get("error_detail") or fstate.get("error"))
+                    warnings.append(
+                        {
+                            "source_key": key,
+                            "ticker": ticker,
+                            "kind": "stale_error",
+                            "message": f"{ticker}: latest checks failing ({detail})",
+                        }
+                    )
         return warnings
 
     def _freshness(self) -> dict[str, Any]:

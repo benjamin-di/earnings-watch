@@ -1,11 +1,13 @@
 """Restart-safe UTC scheduler; a failed sweep has priority over documents."""
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from .maintenance import Maintenance
 from .settings import Settings
 
 FAILED_SWEEP_COOLDOWN = timedelta(minutes=60)
+REPEATED_FAILED_SWEEP_COOLDOWN = timedelta(minutes=240)
 
 
 def _retry_ready(previous, now):
@@ -18,7 +20,19 @@ def _retry_ready(previous, now):
         return True
     if finished.tzinfo is None:
         finished = finished.replace(tzinfo=timezone.utc)
-    return now - finished >= FAILED_SWEEP_COOLDOWN
+    cooldown = FAILED_SWEEP_COOLDOWN
+    raw_doc = previous.get("doc")
+    doc = raw_doc if isinstance(raw_doc, dict) else {}
+    if isinstance(raw_doc, str) and raw_doc:
+        try:
+            parsed = json.loads(raw_doc)
+            if isinstance(parsed, dict):
+                doc = parsed
+        except ValueError:
+            doc = {}
+    if int(doc.get("retry_attempt") or 0) >= 1:
+        cooldown = REPEATED_FAILED_SWEEP_COOLDOWN
+    return now - finished >= cooldown
 
 
 def sweep_due(status, now):

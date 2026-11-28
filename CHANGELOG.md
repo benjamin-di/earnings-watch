@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.12.0] - 2026-11-28
+
+### Added
+
+- Targeted failed-issuer retry on retry sweeps (with 4-hour backoff after repeated failed retries) so a single failing issuer no longer re-sweeps the entire catalogue every hour.
+- Sweep-level transport circuit breaker that aborts early after 3 consecutive hub/transport failures (`NotStarted`, `model run failed`, `model run timed out`) and preserves full-sweep retry once connectivity returns.
+- `stale_error` coverage warning when an issuer has `>= 3` consecutive fetch failures and no successful check in >72 hours.
+- Layer-1 discovery fallback on failed `plain` fetches and automatic promotion from `plain` to `websearch` after repeated HTTP 403/202 WAF blocks.
+
+### Fixed
+
+- Allow standard 1-turn JSON validation repair (`allow_repair=True`) on `repair_rejected()`, skip repair calls for claims already covered by verified held events, and catch `repair_rejected()` failures so already-verified events are never discarded.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with `0.11.0`; no schema change.
+
 ## [0.11.0] - 2026-11-28
 
 ### Added
