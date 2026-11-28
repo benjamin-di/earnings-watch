@@ -1,18 +1,5 @@
 # Changelog
 
-## [0.10.2] - 2026-11-28
-
-### Fixed
-
-- Fall back from MarkitDigital's 5-item-capped ASX JSON feed to ASX's full-year HTML announcements table (`www.asx.com.au`) when no historical results dates are returned, restoring cadence projection for ASX issuers with frequent routine filings.
-- Filter already-covered rejected claims (exact-date matches against verified events, or past-dated claims already covered by a past event) out of `fetch_state.rejected` and sweep errors so redundant unverified claims do not raise false-positive coverage notices or mark sweeps failed.
-- Scope web hub coverage notices to the Upcoming and Companies views rather than Digests & alerts and Calendar.
-
-### Upgrade
-
-- Action required: none.
-- Rollback: compatible with 0.10.1; no schema change.
-
 ## [0.10.1] - 2026-11-27
 
 ### Fixed
