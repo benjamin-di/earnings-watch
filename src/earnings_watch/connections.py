@@ -565,10 +565,29 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         parts.append(
             f'<div class="filter-pills" role="navigation" aria-label="Filter events">{pill_html}{header_actions}</div>'
         )
-        parts.append(
-            f'<p class="muted small">Next 90 days · {html.escape(profile["timezone"])} · '
-            '<a href="/?view=digests">Change timezone</a></p>'
-        )
+        if settings.digests_tab:
+            parts.append(
+                f'<p class="muted small">Next 90 days · {html.escape(profile["timezone"])} · '
+                '<a href="/?view=digests">Change timezone</a></p>'
+            )
+        else:
+            ext_link = (
+                f' · <a href="{html.escape(settings.digests_external_url, quote=True)}">'
+                "Manage email digests &amp; alerts in Briefs</a>"
+                if settings.digests_external_url
+                else ""
+            )
+            parts.append(
+                '<form class="hub-inline-form muted small" method="post" action="/connections/preferences" data-async="reload">'
+                + form_fields(profile, view="upcoming")
+                + '<input type="hidden" name="section" value="timezone">'
+                + "<span>Next 90 days · Timezone: </span>"
+                + _render_timezone_select(profile["timezone"])
+                + " "
+                + button("Save", cls="button secondary btn-sm")
+                + ext_link
+                + "</form>"
+            )
 
         group_defs = [
             ("this_week", "This week"),
@@ -1160,6 +1179,8 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             view = request.query_params.get("view", "upcoming")
             if view not in _VIEWS:
                 view = "upcoming"
+            if not settings.digests_tab and view in {"digests", "preview"}:
+                return RedirectResponse("/?view=upcoming", status_code=303)
             filter_by = request.query_params.get("filter", "all")
             if filter_by not in _FILTERS:
                 filter_by = "all"
@@ -1222,6 +1243,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                     intro=page_intro,
                     active_view=nav_view,
                     account_label=account_label,
+                    show_digests_tab=settings.digests_tab,
                     coverage_warnings=coverage_warnings,
                     suite=_suite_for(request),
                 )
@@ -1308,7 +1330,9 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                         updated["news_scope"] = str(form.get("news_scope")).strip()
                     elif not show_holdings:
                         updated["news_scope"] = "watchlist"
-                if section != "news":
+                if section == "timezone":
+                    tz = str(form.get("timezone"))
+                elif section != "news":
                     for key in ("results", "brief", "weekly_brief", "urgent"):
                         updated[key] = form.get(key) == "on"
                     updated["hour"] = int(str(form.get("hour")))

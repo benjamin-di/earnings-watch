@@ -187,12 +187,26 @@ def urgent_transition(db, identifier):
 
 
 def notices(
-    settings, person: str, at: datetime | None = None, *, include_holdings: bool = True
+    settings,
+    person: str,
+    at: datetime | None = None,
+    *,
+    include_holdings: bool = True,
+    pref_override: dict | None = None,
 ) -> list[tuple[str, str, dict]]:
     """Preview is nonmutating. Unknown submissions never generate replacement effects."""
     at = _utc(at)
     at_iso = at.isoformat()
     pref = profile(settings.db, person)
+    if pref_override:
+        pref = dict(pref)
+        if pref_override.get("timezone"):
+            pref["timezone"] = str(pref_override["timezone"])
+        merged_settings = dict(pref["settings"])
+        for k in ("results", "brief", "weekly_brief", "urgent", "hour"):
+            if k in pref_override:
+                merged_settings[k] = pref_override[k]
+        pref["settings"] = merged_settings
     zone = ZoneInfo(pref["timezone"])
     local = at.astimezone(zone)
     today = local.date()
@@ -437,7 +451,7 @@ def _resolve_directory_person(directory, identifier: str) -> dict:
         return pool.submit(asyncio.run, directory.resolve(identifier)).result()
 
 
-def prepare(settings, directory=None) -> None:
+def prepare(settings, directory=None, *, pref_overrides: dict[str, dict] | None = None) -> None:
     if directory is None and settings.directory_url:
         key = os.environ.get(settings.directory_key_env, "").strip()
         if key:
@@ -457,7 +471,13 @@ def prepare(settings, directory=None) -> None:
             if not info.get("admitted") or info.get("disabled"):
                 continue
             include_holdings = bool(info.get("portfolio_admitted") is True)
-        for key, kind, payload in notices(settings, identifier, include_holdings=include_holdings):
+        person_override = pref_overrides.get(identifier) if pref_overrides is not None else None
+        for key, kind, payload in notices(
+            settings,
+            identifier,
+            include_holdings=include_holdings,
+            pref_override=person_override,
+        ):
             if kind in {"brief", "weekly_brief"}:
                 with connect(settings.db, write=True) as db:
                     db.execute(

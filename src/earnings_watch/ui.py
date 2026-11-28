@@ -207,6 +207,7 @@ def hub_page(
     active_view: str = "upcoming",
     account_label: str = "",
     show_nav: bool = True,
+    show_digests_tab: bool = True,
     coverage_warnings: Sequence[dict[str, Any]] | None = None,
     suite: Suite | None = None,
 ) -> str:
@@ -216,7 +217,7 @@ def hub_page(
     tabs = [
         ("upcoming", "Upcoming"),
         ("companies", "Companies"),
-        ("digests", "Digests & alerts"),
+        *([("digests", "Digests & alerts")] if show_digests_tab else []),
         ("calendar", "Calendar"),
     ]
     nav_links = "".join(

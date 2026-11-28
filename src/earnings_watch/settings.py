@@ -37,6 +37,8 @@ class Settings(BaseModel):
     codex_base_url: str = ""
     codex_key_env: str = ""
     public_url: str = ""
+    digests_tab: bool = True
+    digests_external_url: str = ""
     oidc_issuer: str = ""
     oidc_client_id: str = "earnings-connections"
     oidc_required_group: str = ""
@@ -77,11 +79,11 @@ class Settings(BaseModel):
             raise ValueError("unknown provider in allowlist")
         return values
 
-    @field_validator("codex_base_url")
+    @field_validator("codex_base_url", "digests_external_url")
     @classmethod
     def endpoint_url(cls, value):
         if value and not re.fullmatch(r"https?://[^/\s\"\\]+[^\s\"\\]*", value):
-            raise ValueError("codex_base_url must be an http(s) URL")
+            raise ValueError("URL must be an http(s) URL")
         return value.rstrip("/")
 
     @field_validator("codex_key_env")
