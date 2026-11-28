@@ -64,8 +64,8 @@ def test_extract_link_manifest_strips_chrome_and_diffs_seen_urls() -> None:
           <tr>
             <td>Nov 5, 2026</td>
             <td>Q3 2026 Earnings Presentation</td>
-            <td><a href="https://s2.q4cdn.com/99/Q3-Deck.pdf">PDF</a></td>
-            <td><a href="https://s2.q4cdn.com/99/Q3-Audio.mp3">Listen</a></td>
+            <td><a href="https://cdn.example.net/99/Q3-Deck.pdf">PDF</a></td>
+            <td><a href="https://cdn.example.net/99/Q3-Audio.mp3">Listen</a></td>
           </tr>
         </table>
       </main>
@@ -74,8 +74,8 @@ def test_extract_link_manifest_strips_chrome_and_diffs_seen_urls() -> None:
     """
     manifest = extract_link_manifest("https://investors.example.com/events-and-presentations", html)
     assert [m.url for m in manifest] == [
-        "https://s2.q4cdn.com/99/Q3-Deck.pdf",
-        "https://s2.q4cdn.com/99/Q3-Audio.mp3",
+        "https://cdn.example.net/99/Q3-Deck.pdf",
+        "https://cdn.example.net/99/Q3-Audio.mp3",
     ]
     assert "Q3 2026 Earnings Presentation" in manifest[0].context
     assert manifest[0].text == "PDF"
@@ -101,8 +101,8 @@ async def test_classify_ir_delta_zero_calls_when_empty_and_rejects_hallucination
 
     html = """
     <main><ul>
-      <li>Investor Day 2026 <a href="https://s2.q4cdn.com/99/id-2026.pdf">Slides</a></li>
-      <li>Q3 Call <a href="https://www.youtube.com/watch?v=abc123">Replay</a></li>
+      <li>Investor Day 2026 <a href="https://cdn.example.net/99/id-2026.pdf">Slides</a></li>
+      <li>Q3 Call <a href="https://media.example.org/q3-replay.mp3">Replay</a></li>
     </ul></main>
     """
     manifest = extract_link_manifest("https://investors.example.com/events-and-presentations", html)
@@ -110,7 +110,7 @@ async def test_classify_ir_delta_zero_calls_when_empty_and_rejects_hallucination
         {
             "items": [
                 {
-                    "url": "https://s2.q4cdn.com/99/id-2026.pdf",
+                    "url": "https://cdn.example.net/99/id-2026.pdf",
                     "category": "presentation",
                     "title": "Investor Day 2026",
                     "published_date": "2026-10-15",
@@ -118,7 +118,7 @@ async def test_classify_ir_delta_zero_calls_when_empty_and_rejects_hallucination
                     "evidence": "Investor Day 2026",
                 },
                 {
-                    "url": "https://www.youtube.com/watch?v=abc123",
+                    "url": "https://media.example.org/q3-replay.mp3",
                     "category": "audio_replay",
                     "title": "Q3 Call Replay",
                     "published_date": "2026-11-05",
@@ -126,7 +126,7 @@ async def test_classify_ir_delta_zero_calls_when_empty_and_rejects_hallucination
                     "evidence": "Q3 Call",
                 },
                 {
-                    "url": "https://s2.q4cdn.com/99/hallucinated.pdf",
+                    "url": "https://cdn.example.net/99/hallucinated.pdf",
                     "category": "presentation",
                     "title": "Fake",
                     "published_date": "2026-11-05",
@@ -183,7 +183,7 @@ async def test_polling_runs_ir_harvest_even_when_released_at_already_set(tmp_pat
 
     async def fake_ir_harvest(source, event_row):
         ir_calls.append(event_row["id"])
-        return [{"id": "asset-1", "url": "https://s2.q4cdn.com/99/deck.pdf"}]
+        return [{"id": "asset-1", "url": "https://cdn.example.net/99/deck.pdf"}]
 
     transport = Transport(
         hosts={"investors.example.com"},
@@ -218,7 +218,7 @@ async def test_ir_assets_persistence_and_library_targets_v2(tmp_path: Path) -> N
             "id": "asset-investor-day",
             "source_key": src.key,
             "event_id": None,
-            "url": "https://s2.q4cdn.com/99/investor-day-2026.pdf",
+            "url": "https://cdn.example.net/99/investor-day-2026.pdf",
             "category": "presentation",
             "role": "presentation",
             "title": "Investor Day 2026",
@@ -257,7 +257,7 @@ async def test_harvest_ir_assets_persists_seen_urls_and_skips_llm_on_second_pass
 
     html = """
     <html><body><main>
-      <div>Q3 2026 Slides <a href="https://s2.q4cdn.com/99/q3-slides.pdf">PDF</a></div>
+      <div>Q3 2026 Slides <a href="https://cdn.example.net/99/q3-slides.pdf">PDF</a></div>
     </main></body></html>
     """
     transport = Transport(
@@ -272,7 +272,7 @@ async def test_harvest_ir_assets_persists_seen_urls_and_skips_llm_on_second_pass
         {
             "items": [
                 {
-                    "url": "https://s2.q4cdn.com/99/q3-slides.pdf",
+                    "url": "https://cdn.example.net/99/q3-slides.pdf",
                     "category": "presentation",
                     "title": "Q3 2026 Slides",
                     "published_date": "2026-11-05",
@@ -306,7 +306,7 @@ async def test_q4_ir_assets_discovers_presentations_and_events() -> None:
                         {
                             "Title": "Investor Day 2026",
                             "PresentationDate": "10/15/2026 09:00:00",
-                            "DocumentPath": "https://s2.q4cdn.com/99/id.pdf",
+                            "DocumentPath": "https://cdn.example.net/99/id.pdf",
                         }
                     ]
                 },
@@ -319,12 +319,12 @@ async def test_q4_ir_assets_discovers_presentations_and_events() -> None:
                         {
                             "Title": "Q3 2026 Earnings Call",
                             "StartDate": "11/05/2026 14:00:00",
-                            "WebCastLink": "https://s2.q4cdn.com/99/call.mp3",
+                            "WebCastLink": "https://cdn.example.net/99/call.mp3",
                             "Attachments": [
                                 {
                                     "Title": "Q3 Transcript",
                                     "Type": "Transcript",
-                                    "Url": "https://s2.q4cdn.com/99/q3-transcript.pdf",
+                                    "Url": "https://cdn.example.net/99/q3-transcript.pdf",
                                 }
                             ],
                         }
