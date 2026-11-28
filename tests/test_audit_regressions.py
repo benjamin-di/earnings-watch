@@ -146,7 +146,7 @@ def test_schema_one_upgrade_preserves_receipts_key_and_supports_retirement(seede
     assert key.read_bytes() == b"original-signing-key"
     Catalogue(path).commit_issuer("alpha", [], run_id="retire", authoritative=True)
     with connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
         assert tuple(db.execute("SELECT * FROM document_downloads").fetchone()) == (
             "alice",
             doc["id"],

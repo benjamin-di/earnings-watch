@@ -92,7 +92,7 @@ def test_settings_toml_and_env_for_integrations_and_targets(tmp_path, monkeypatc
 
 def test_preferences_zero_migration_validation_and_news_mute(seeded):
     with connect(seeded.db) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
 
     accounts.provision(seeded.db, "alice")
     prof = accounts.profile(seeded.db, "alice")

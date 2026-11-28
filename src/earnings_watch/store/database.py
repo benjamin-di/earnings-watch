@@ -27,7 +27,7 @@ from earnings_watch.symbols import (
 )
 
 Row = dict[str, Any]
-SCHEMA = 4
+SCHEMA = 3
 MAX_PENDING_REGISTRATIONS = 100
 MAX_DAILY_REGISTRATIONS = 100
 
@@ -137,7 +137,6 @@ def _upgrade(path: Path) -> None:
                 "CREATE TABLE IF NOT EXISTS ir_assets (id TEXT PRIMARY KEY, source_key TEXT NOT NULL REFERENCES sources(key) ON DELETE CASCADE, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, url TEXT NOT NULL, category TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', published_date TEXT, period TEXT, evidence TEXT NOT NULL DEFAULT '', evidence_url TEXT NOT NULL DEFAULT '', first_seen TEXT NOT NULL, doc TEXT NOT NULL DEFAULT '{}', UNIQUE(source_key, url))"
             )
             db.execute("CREATE INDEX IF NOT EXISTS ir_assets_source ON ir_assets(source_key)")
-            db.execute("PRAGMA user_version=4")
         elif version != SCHEMA:
             raise EarningsError("temporarily_unavailable", "unsupported database schema")
         db.commit()
