@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import importlib
 import json
 import math
@@ -15,11 +16,12 @@ from urllib.parse import urlsplit
 from pydantic import ValidationError
 
 from .engine.cadence import project_expected_earnings
+from .engine.coverage import confirmation_deadline_days
 from .engine.reconcile import reconcile
 from .engine.verify import check_timing_candidates, rejection_covered, verify_claims
 from .errors import EarningsError
 from .llm.runner import AgentRunner, AgentTask, BudgetRunner, CliRunner
-from .model.events import Event, EventStatus, ExtractResult, TimingSelection
+from .model.events import Event, EventStatus, EventType, ExtractResult, TimingSelection
 from .model.sources import FetchStrategy
 from .model.urls import apex_domain
 from .providers.generic_ir import capture
@@ -192,6 +194,19 @@ def _parse_run_doc(raw: Any) -> dict[str, Any]:
     return {}
 
 
+def _layer1_fingerprint(docs: dict[str, str], historical: list[date]) -> str:
+    """Return a deterministic SHA-256 fingerprint of Layer 1 adapter output, or '' if empty."""
+    if not docs and not historical:
+        return ""
+    payload = {
+        "docs": sorted((url, text) for url, text in docs.items()),
+        "historical": sorted(d.isoformat() for d in historical),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _existing_events_summary(events: list[Event]) -> list[dict[str, str]]:
     return [
         {
@@ -274,6 +289,7 @@ class Maintenance:
         force: bool = False,
         docs_only: bool = False,
         search: set[str] | None = None,
+        only: set[str] | None = None,
     ) -> dict:
         settings = self.settings
         with maintenance_lock(settings):
@@ -318,6 +334,8 @@ class Maintenance:
             sources = self.catalogue.sources()
             active = self.catalogue.active_keys()
             sources = [s for s in sources if s.key in active]
+            if only:
+                sources = [s for s in sources if s.key in only]
             if search and search - {s.key for s in sources}:
                 raise EarningsError(
                     "invalid_argument", "search contains unknown or dormant source keys"
@@ -420,24 +438,129 @@ class Maintenance:
                             now = datetime.now(timezone.utc)
                             today = now.date()
                             prev_state = self.catalogue.state("fetch_state", source.key)
+                            ipo_date_str: str | None = (
+                                str(prev_state["ipo_date"])
+                                if isinstance(prev_state.get("ipo_date"), str)
+                                and prev_state.get("ipo_date")
+                                else None
+                            )
+                            ipo_checked_at: str | None = (
+                                str(prev_state["ipo_checked_at"])
+                                if isinstance(prev_state.get("ipo_checked_at"), str)
+                                and prev_state.get("ipo_checked_at")
+                                else None
+                            )
+                            if settings.sec_contact and (
+                                source.sec_cik is None or (not old and not ipo_checked_at)
+                            ):
+                                from .providers.sec_edgar import resolve_sec_identity
+
+                                sec_id = await resolve_sec_identity(
+                                    transport, source, settings.sec_contact, today=today
+                                )
+                                ipo_checked_at = now.isoformat()
+                                src_updates: dict[str, Any] = {}
+                                if sec_id.sec_cik is not None and source.sec_cik is None:
+                                    src_updates["sec_cik"] = sec_id.sec_cik
+                                if sec_id.fy_end_month is not None and source.sec_cik is None:
+                                    src_updates["fy_end_month"] = sec_id.fy_end_month
+                                if src_updates:
+                                    source = source.model_copy(update=src_updates)
+                                    if not dry_run:
+                                        self.catalogue.put_source(source)
+                                ipo_date_str = (
+                                    sec_id.ipo_date.isoformat()
+                                    if sec_id.ipo_date is not None
+                                    else None
+                                )
                             researched = source.fetch == "websearch" or source.key in (
                                 search or set()
                             )
                             adapter_docs: dict[str, str] = {}
+                            l1_hash = ""
+                            skipped_unchanged = False
                             if researched:
                                 adapter_docs, historical_dates = await _discover_layer1(
                                     source, transport, settings, today=today
                                 )
-                                result, documents = await research_events(
-                                    source,
-                                    runner,
-                                    model=settings.model,
-                                    existing_events=_existing_events_summary(old),
-                                    official_documents=adapter_docs or None,
-                                    sec_contact=settings.sec_contact,
+                                l1_hash = _layer1_fingerprint(adapter_docs, historical_dates)
+                                deadline, _ = confirmation_deadline_days(source, old)
+                                overdue_unconfirmed = any(
+                                    ev.type == EventType.EARNINGS
+                                    and ev.status == EventStatus.EXPECTED
+                                    and 0 <= (ev.date - today).days <= deadline
+                                    for ev in old
                                 )
-                                documents = {**adapter_docs, **documents}
-                                page = Capture(source.calendar_url, "")
+                                can_skip_llm = (
+                                    bool(l1_hash)
+                                    and not force
+                                    and not search
+                                    and prev_state.get("layer1_hash") == l1_hash
+                                    and not _weekly_audit_due(prev_state, now)
+                                    and not overdue_unconfirmed
+                                    and not prev_state.get("rejected")
+                                    and int(prev_state.get("consecutive_failures") or 0) == 0
+                                )
+                                if can_skip_llm:
+                                    skipped_unchanged = True
+                                    merged = list(old)
+                                    projected = project_expected_earnings(
+                                        source,
+                                        merged,
+                                        today=today,
+                                        historical_dates=historical_dates,
+                                    )
+                                    if projected is not None and projected.id not in {
+                                        e.id for e in merged
+                                    }:
+                                        merged = sorted(
+                                            [*merged, projected],
+                                            key=lambda item: (item.date, item.id),
+                                        )
+                                    consecutive_transport_errors = 0
+                                    planned.extend(e.model_dump(mode="json") for e in merged)
+                                    counts["events"] += len(merged)
+                                    if not dry_run:
+                                        if len(merged) != len(old):
+                                            self.catalogue.commit_issuer(
+                                                source.key,
+                                                merged,
+                                                run_id=run_id,
+                                                authoritative=False,
+                                            )
+                                        skip_doc: dict[str, Any] = {
+                                            "last_ok": now.isoformat(),
+                                            "consecutive_failures": 0,
+                                            "rejected": [],
+                                            "rejected_details": [],
+                                            "layer1_hash": l1_hash,
+                                        }
+                                        if prev_state.get("last_agent_audit"):
+                                            skip_doc["last_agent_audit"] = prev_state[
+                                                "last_agent_audit"
+                                            ]
+                                        if ipo_date_str and not any(
+                                            ev.type == EventType.EARNINGS
+                                            and ev.status != EventStatus.EXPECTED
+                                            for ev in merged
+                                        ):
+                                            skip_doc["ipo_date"] = ipo_date_str
+                                        if ipo_checked_at:
+                                            skip_doc["ipo_checked_at"] = ipo_checked_at
+                                        self.catalogue.set_state(
+                                            "fetch_state", source.key, skip_doc
+                                        )
+                                else:
+                                    result, documents = await research_events(
+                                        source,
+                                        runner,
+                                        model=settings.model,
+                                        existing_events=_existing_events_summary(old),
+                                        official_documents=adapter_docs or None,
+                                        sec_contact=settings.sec_contact,
+                                    )
+                                    documents = {**adapter_docs, **documents}
+                                    page = Capture(source.calendar_url, "")
                             else:
                                 try:
                                     page = await capture(transport, source.calendar_url)
@@ -490,6 +613,7 @@ class Maintenance:
                                     today=today,
                                     page_text=page.text,
                                 )
+                                l1_hash = _layer1_fingerprint(adapter_docs, historical_dates)
                                 if not runner.remaining:
                                     raise ValueError("model call budget exhausted")
                                 prompt_payload: dict[str, Any] = {
@@ -511,7 +635,9 @@ class Maintenance:
                                 result = await runner.run(task)
                                 documents = {**adapter_docs, page.url: page.text}
                             counts["calls"] = runner.calls
-                            if result.parsed is None:
+                            if skipped_unchanged:
+                                pass
+                            elif result.parsed is None:
                                 errors.append({"source": source.key, "reason": "llm_disabled"})
                             else:
                                 extracted = ExtractResult.model_validate(result.parsed)
@@ -700,6 +826,18 @@ class Maintenance:
                                         fetch_doc["last_agent_audit"] = prev_state[
                                             "last_agent_audit"
                                         ]
+                                    if l1_hash:
+                                        fetch_doc["layer1_hash"] = l1_hash
+                                    elif prev_state.get("layer1_hash"):
+                                        fetch_doc["layer1_hash"] = prev_state["layer1_hash"]
+                                    if ipo_date_str and not any(
+                                        ev.type == EventType.EARNINGS
+                                        and ev.status != EventStatus.EXPECTED
+                                        for ev in merged
+                                    ):
+                                        fetch_doc["ipo_date"] = ipo_date_str
+                                    if ipo_checked_at:
+                                        fetch_doc["ipo_checked_at"] = ipo_checked_at
                                     self.catalogue.set_state("fetch_state", source.key, fetch_doc)
                                 if uncovered_rejected:
                                     errors.append(
@@ -762,7 +900,13 @@ class Maintenance:
                             }
                             if waf_blocked:
                                 err_doc["waf_blocked"] = True
-                            for keep_key in ("last_ok", "last_agent_audit"):
+                            for keep_key in (
+                                "last_ok",
+                                "last_agent_audit",
+                                "layer1_hash",
+                                "ipo_date",
+                                "ipo_checked_at",
+                            ):
                                 if prev_err_state.get(keep_key):
                                     err_doc[keep_key] = prev_err_state[keep_key]
                             self.catalogue.set_state("fetch_state", source.key, err_doc)
@@ -819,3 +963,97 @@ class Maintenance:
                     for obsolete in sorted(backups.glob("*.db"))[:-7]:
                         obsolete.unlink()
             return response
+
+    async def probe_near_earnings(self, *, dry_run: bool = False) -> dict[str, Any]:
+        """Lightweight HTTP-only Layer 1 check for issuers with expected earnings within 14 days.
+
+        Makes zero LLM calls unless a Layer 1 feed fingerprint changes, in which case a targeted
+        single-issuer confirmation sweep is triggered immediately.
+        """
+        settings = self.settings
+        if (settings.data_dir / ".paused").exists():
+            return {"state": "paused", "checked": 0, "changed": []}
+        from .providers import definitions
+
+        providers = {
+            name: value
+            for name, value in definitions().items()
+            if name in settings.provider_allowlist
+        }
+        today = datetime.now(timezone.utc).date()
+        cutoff = today + timedelta(days=14)
+        active = self.catalogue.active_keys()
+        sources = [s for s in self.catalogue.sources() if s.key in active]
+        events_by_key: dict[str, list[dict[str, Any]]] = {}
+        for ev in self.catalogue.events():
+            ik = ev.get("issuer_key")
+            if isinstance(ik, str):
+                events_by_key.setdefault(ik, []).append(ev)
+
+        candidates = []
+        for source in sources:
+            evs = events_by_key.get(source.key, [])
+            has_confirmed = any(
+                e.get("type") == "earnings"
+                and e.get("status") == "ir-confirmed"
+                and today <= date.fromisoformat(e["date"]) <= cutoff
+                for e in evs
+            )
+            if has_confirmed:
+                continue
+            has_expected = any(
+                e.get("type") == "earnings"
+                and e.get("status") == "expected"
+                and today <= date.fromisoformat(e["date"]) <= cutoff
+                for e in evs
+            )
+            if has_expected:
+                candidates.append(source)
+
+        if not candidates:
+            return {"checked": 0, "changed": []}
+
+        issuer_hosts = {
+            h.lower()
+            for s in candidates
+            for u in [s.calendar_url, s.results_url, s.announcements_url]
+            if u
+            for h in (urlsplit(u).hostname,)
+            if h
+        }
+        hosts = set(issuer_hosts) | {
+            host for definition in providers.values() for host in definition["hosts"]
+        }
+        apex_domains = {a for h in issuer_hosts if h and (a := apex_domain(h))}
+        transport = self.transport or Transport(
+            {h for h in hosts if h},
+            state=None,
+            sec_contact=settings.sec_contact,
+            policies={
+                host: definition
+                for definition in providers.values()
+                for host in definition["hosts"]
+            },
+            cache_max_bytes=settings.cache_max_mb * 1024 * 1024,
+            apex_domains=apex_domains or None,
+        )
+
+        changed: set[str] = set()
+        for source in candidates:
+            try:
+                adapter_docs, historical_dates = await _discover_layer1(
+                    source, transport, settings, today=today
+                )
+            except Exception:
+                continue
+            l1_hash = _layer1_fingerprint(adapter_docs, historical_dates)
+            if not l1_hash:
+                continue
+            prev_state = self.catalogue.state("fetch_state", source.key)
+            if prev_state.get("layer1_hash") != l1_hash:
+                changed.add(source.key)
+
+        result: dict[str, Any] = {"checked": len(candidates), "changed": sorted(changed)}
+        if changed and not dry_run:
+            result["sweep"] = await self.sweep(force=True, search=changed, only=changed)
+        return result

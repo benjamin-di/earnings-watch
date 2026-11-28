@@ -139,8 +139,39 @@ async def register_pending(
             needle = hints.get("name") or hints.get("isin") or row["ticker"]
             if needle.casefold() not in page.text.casefold():
                 raise ValueError("requested issuer is absent from the proposed page")
+            ipo_date = None
+            if settings.sec_contact and source.sec_cik is None:
+                from .providers.sec_edgar import resolve_sec_identity
+
+                sec_transport = Transport(
+                    {"www.sec.gov", "data.sec.gov"},
+                    state=None if dry_run else catalogue,
+                    sec_contact=settings.sec_contact,
+                )
+                sec_id = await resolve_sec_identity(
+                    sec_transport, source, settings.sec_contact, today=now.date()
+                )
+                updates: dict = {}
+                if sec_id.sec_cik is not None:
+                    updates["sec_cik"] = sec_id.sec_cik
+                if sec_id.fy_end_month is not None:
+                    updates["fy_end_month"] = sec_id.fy_end_month
+                if updates:
+                    source = source.model_copy(update=updates)
+                ipo_date = sec_id.ipo_date
             if not dry_run:
                 catalogue.put_source(source)
+                if ipo_date is not None:
+                    prev_fetch = catalogue.state("fetch_state", source.key)
+                    catalogue.set_state(
+                        "fetch_state",
+                        source.key,
+                        {
+                            **prev_fetch,
+                            "ipo_date": ipo_date.isoformat(),
+                            "ipo_detected_at": now.isoformat(),
+                        },
+                    )
             registered.append(source.key)
         except NotStarted:
             # Budget exhausted before running: clear backoff so the next tick retries cleanly.

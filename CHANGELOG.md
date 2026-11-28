@@ -6,11 +6,17 @@
 
 - Seed `people.timezone` from Pocket ID's OIDC `zoneinfo` claim on first login or while still on default `UTC` without overwriting explicit user preferences or failing on invalid values.
 - Render exact-time event cards with `<time datetime="..." data-local-time>` and progressively format times and the Upcoming timezone label in the browser's local timezone.
+- Adaptive per-issuer earnings confirmation deadlines (`confirmation_deadline_days`) learned from observed confirmed lead times, falling back to market-regime priors (US 7d, HKEX 9d, EU/UK/ASX 14d).
+- Two-tier coverage status: `coverage_warnings` reports actionable faults and overdue unconfirmed earnings only, while `coverage_info` surfaces healthy contextual states (`newly_listed`, `awaiting_first_event`) inline on the Companies tab without amber alert fatigue.
+- Inline confirmation lead-time hints (`Usually confirms ~N days prior`) on expected earnings cards in Upcoming when historical lead-time data exists.
+- Deterministic SEC EDGAR identity and recent-IPO resolver (`resolve_sec_identity`) against `company_tickers.json` and `CIK*.json` with company-name collision guards, automatically backfilling missing `sec_cik` and verified `fy_end_month` on registration and sweep.
+- Layer-1 content-hash gating (`layer1_hash`) on `websearch` sweeps to skip redundant LLM calls when official Q4/HKEX/ASX feeds are unchanged, plus a 4-hour HTTP-only `probe_near_earnings()` fast path that triggers a targeted single-issuer confirmation sweep when a feed changes within 14 days of expected earnings.
 
 ### Fixed
 
 - Remove the cramped inline timezone dropdown/Save form on Upcoming when `digests_tab = false`, replacing it with a clean single-line summary (`Next 90 days · <timezone> · Manage email digests & alerts in Briefs`).
 - Fix `.hub-inline-form` alignment, spacing, wrapping, and `<select>` width in `app.css`.
+- Detect Q4 Inc investor-relations paths (`/events-and-presentations`, `/investor-events`) regardless of fetch mode and fall back to first-segment subpath bases when root `/feed/Event.svc` returns 404.
 
 ### Upgrade
 

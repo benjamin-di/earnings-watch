@@ -63,6 +63,7 @@ def sweep_due(status, now):
 async def run(settings: Settings) -> None:
     maintenance = Maintenance(settings)
     last_tick = None
+    last_probe_bucket = None
     while True:
         now = datetime.now(timezone.utc)
         tick = int(now.timestamp() // 600)
@@ -74,6 +75,10 @@ async def run(settings: Settings) -> None:
                 else:
                     if maintenance.catalogue.has_pending_registrations():
                         await maintenance.register()
+                    probe_bucket = int(now.timestamp() // 14400)
+                    if probe_bucket != last_probe_bucket:
+                        last_probe_bucket = probe_bucket
+                        await maintenance.probe_near_earnings()
                     await maintenance.sweep(docs_only=True)
             except Exception:
                 # Retry on the next bounded tick; never retire the daily sweep.

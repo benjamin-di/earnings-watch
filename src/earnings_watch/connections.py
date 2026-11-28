@@ -516,6 +516,10 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             if when_iso
             else f"<span>{html.escape(event_row['when'])}</span>"
         )
+        lead_hint = ""
+        if event_row.get("status") == "expected" and event_row.get("typical_lead_days"):
+            days = int(event_row["typical_lead_days"])
+            lead_hint = f'<span class="muted small">Usually confirms ~{days} days prior</span>'
         return (
             '<li class="event-card"><div class="event-main">'
             '<div class="event-head">'
@@ -526,6 +530,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             '<div class="event-meta">'
             f"{when_html}"
             f"{_certainty_badge(event_row)}"
+            f"{lead_hint}"
             f"{origin_badges}"
             "</div></div>"
             '<div class="event-links">'
@@ -605,7 +610,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             )
             parts.append(
                 '<p class="muted small">Next 90 days · '
-                f'<span data-local-tz>{html.escape(profile["timezone"])}</span>'
+                f"<span data-local-tz>{html.escape(profile['timezone'])}</span>"
                 f"{ext_link}</p>"
             )
 
@@ -657,6 +662,11 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         upcoming_by_source: dict[str, dict] = {}
         for ev in service.upcoming(days=90, include_holdings=show_holdings)["events"]:
             upcoming_by_source.setdefault(ev["issuer_key"], ev)
+        coverage_info_by_source: dict[str, dict] = {
+            str(item["source_key"]): item
+            for item in service.status().get("coverage_info", [])
+            if item.get("source_key")
+        }
 
         options = "".join(
             '<option value="'
@@ -831,6 +841,9 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 badges.append('<span class="badge warn">Discovering…</span>')
 
             ev = upcoming_by_source.get(item["source_key"]) if item.get("source_key") else None
+            info_item = (
+                coverage_info_by_source.get(item["source_key"]) if item.get("source_key") else None
+            )
             if ev:
                 ev_summary = (
                     format_event_summary(str(ev.get("period") or ""), str(ev.get("type") or ""))
@@ -841,6 +854,16 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 sub_text = item["reason"]
             elif item["state"] == "queued":
                 sub_text = "Queued for official IR calendar discovery"
+            elif info_item and info_item.get("kind") == "newly_listed":
+                badges.append('<span class="badge">Newly listed</span>')
+                ipo_raw = str(info_item.get("ipo_date") or "")
+                try:
+                    ipo_label = datetime.fromisoformat(ipo_raw[:10]).strftime("%b %Y")
+                    sub_text = f"Newly listed (IPO {ipo_label}) · awaiting first earnings"
+                except ValueError:
+                    sub_text = "Newly listed · awaiting first earnings"
+            elif info_item and info_item.get("kind") == "awaiting_first_event":
+                sub_text = "Awaiting first scheduled event"
             else:
                 sub_text = "No upcoming events in the next 90 days"
 

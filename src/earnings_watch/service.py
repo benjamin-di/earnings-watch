@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from . import calendar, ics
+from .engine.coverage import confirmation_deadline_days
 from .errors import EarningsError
 from .store.database import LibraryReader, PersonalStore, connect, database_id
 from .store.accounts import effective_follows
@@ -88,9 +89,23 @@ class PersonService:
         from .presentation import present
 
         sources_by_key = {s.key: s for s in self.library.sources()}
+        all_events_by_key: dict[str, list[dict[str, Any]]] = {}
+        for ev in self.library.events():
+            ik = ev.get("issuer_key")
+            if isinstance(ik, str):
+                all_events_by_key.setdefault(ik, []).append(ev)
         selected = [
             present(e, self.person, self.library, sources_by_key=sources_by_key) for e in selected
         ]
+        for row in selected:
+            if row.get("type") == "earnings" and row.get("status") == "expected":
+                src = sources_by_key.get(row["issuer_key"])
+                if src is not None:
+                    _, typical = confirmation_deadline_days(
+                        src, all_events_by_key.get(row["issuer_key"], ())
+                    )
+                    if typical is not None:
+                        row["typical_lead_days"] = typical
         if not effective_holdings:
             for row in selected:
                 row["why_followed"] = [w for w in row.get("why_followed", []) if w != "holding"]
@@ -115,6 +130,7 @@ class PersonService:
             "certainty",
             "documents",
             "why_followed",
+            "typical_lead_days",
         }
         return {
             "events": [{k: v for k, v in row.items() if k in fields} for row in selected],
@@ -304,13 +320,17 @@ class PersonService:
         )
 
     def status(self) -> dict[str, Any]:
+        warnings, info = self._coverage_status()
         return (
             self.library.status()
             | self._freshness()
-            | {"coverage_warnings": self._coverage_warnings()}
+            | {"coverage_warnings": warnings, "coverage_info": info}
         )
 
     def _coverage_warnings(self) -> list[dict[str, Any]]:
+        return self._coverage_status()[0]
+
+    def _coverage_status(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         follows = [
             row
             for row in effective_follows(self.person.path, self.person.person)
@@ -318,19 +338,30 @@ class PersonService:
             and (self.include_holdings or not str(row.get("origin") or "").startswith("holdings:"))
         ]
         if not follows:
-            return []
+            return [], []
         sources_by_key = {s.key: s for s in self.library.sources()}
         followed_keys: dict[str, str] = {}
+        added_dates: dict[str, date] = {}
         for row in follows:
             key = str(row["source_key"])
-            if key in sources_by_key and key not in followed_keys:
-                followed_keys[key] = sources_by_key[key].ticker
+            if key in sources_by_key:
+                if key not in followed_keys:
+                    followed_keys[key] = sources_by_key[key].ticker
+                added_raw = row.get("added_at")
+                if isinstance(added_raw, str) and added_raw:
+                    try:
+                        added_dt = datetime.fromisoformat(added_raw).date()
+                    except ValueError:
+                        added_dt = None
+                    if added_dt is not None and (
+                        key not in added_dates or added_dt < added_dates[key]
+                    ):
+                        added_dates[key] = added_dt
         if not followed_keys:
-            return []
+            return [], []
 
         now = datetime.now(timezone.utc)
         today = now.date()
-        soon_cutoff = today + timedelta(days=21)
         events_by_key: dict[str, list[dict[str, Any]]] = {k: [] for k in followed_keys}
         for ev in self.library.events():
             issuer_key = ev.get("issuer_key")
@@ -351,30 +382,73 @@ class PersonService:
                     heal_states[key] = json.loads(hrow[0])
 
         warnings: list[dict[str, Any]] = []
+        info: list[dict[str, Any]] = []
         for key in sorted(followed_keys):
             ticker = followed_keys[key]
+            source_obj = sources_by_key[key]
             ev_list = events_by_key[key]
+            fstate = fetch_states.get(key) or {}
+            consecutive_failures = int(fstate.get("consecutive_failures") or 0)
+            is_healthy = (
+                bool(fstate.get("last_ok"))
+                and consecutive_failures == 0
+                and not fstate.get("error")
+            )
+
             if not ev_list:
-                warnings.append(
-                    {
-                        "source_key": key,
-                        "ticker": ticker,
-                        "kind": "no_events",
-                        "message": f"{ticker}: no tracked events",
-                    }
-                )
+                ipo_raw = fstate.get("ipo_date")
+                ipo_dt: date | None = None
+                if isinstance(ipo_raw, str) and ipo_raw:
+                    try:
+                        ipo_dt = date.fromisoformat(ipo_raw[:10])
+                    except ValueError:
+                        ipo_dt = None
+                if is_healthy and ipo_dt is not None and 0 <= (today - ipo_dt).days <= 180:
+                    info.append(
+                        {
+                            "source_key": key,
+                            "ticker": ticker,
+                            "kind": "newly_listed",
+                            "ipo_date": ipo_dt.isoformat(),
+                            "message": f"{ticker}: newly listed (IPO {ipo_dt:%b %Y}) — awaiting first earnings",
+                        }
+                    )
+                elif (
+                    is_healthy and key in added_dates and 0 <= (today - added_dates[key]).days <= 90
+                ):
+                    info.append(
+                        {
+                            "source_key": key,
+                            "ticker": ticker,
+                            "kind": "awaiting_first_event",
+                            "message": f"{ticker}: awaiting first scheduled event",
+                        }
+                    )
+                else:
+                    warnings.append(
+                        {
+                            "source_key": key,
+                            "ticker": ticker,
+                            "kind": "no_events",
+                            "message": f"{ticker}: no tracked events",
+                        }
+                    )
             else:
+                deadline, _ = confirmation_deadline_days(source_obj, ev_list)
+                degraded = consecutive_failures > 0 or bool(fstate.get("error"))
+                effective_deadline = max(deadline, 14) if degraded else deadline
+                soon_cutoff = today + timedelta(days=effective_deadline)
                 has_confirmed_soon = any(
                     ev.get("type") == "earnings"
                     and ev.get("status") == "ir-confirmed"
-                    and today <= date.fromisoformat(ev["date"]) < soon_cutoff
+                    and today <= date.fromisoformat(ev["date"]) <= soon_cutoff
                     for ev in ev_list
                 )
                 if not has_confirmed_soon:
                     for ev in ev_list:
                         if ev.get("type") == "earnings" and ev.get("status") == "expected":
                             ev_date = date.fromisoformat(ev["date"])
-                            if today <= ev_date < soon_cutoff:
+                            if today <= ev_date <= soon_cutoff:
                                 warnings.append(
                                     {
                                         "source_key": key,
@@ -412,7 +486,6 @@ class PersonService:
                         }
                     )
 
-            fstate = fetch_states.get(key) or {}
             rejected = fstate.get("rejected") or []
             if rejected:
                 warnings.append(
@@ -425,7 +498,7 @@ class PersonService:
                     }
                 )
 
-            if fstate.get("error") and int(fstate.get("consecutive_failures") or 0) >= 3:
+            if fstate.get("error") and consecutive_failures >= 3:
                 last_ok_raw = fstate.get("last_ok")
                 stale = True
                 if isinstance(last_ok_raw, str) and last_ok_raw:
@@ -446,7 +519,7 @@ class PersonService:
                             "message": f"{ticker}: latest checks failing ({detail})",
                         }
                     )
-        return warnings
+        return warnings, info
 
     def _freshness(self) -> dict[str, Any]:
         status = self.library.status()

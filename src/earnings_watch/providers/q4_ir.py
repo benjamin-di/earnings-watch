@@ -82,7 +82,7 @@ def is_q4_source(source: Source, page_text: str = "") -> bool:
         return False
     if "default.aspx" in url_lower or "powered by q4 inc" in page_text.lower():
         return True
-    if str(source.fetch) == "websearch" and "/events-and-presentations" in url_lower:
+    if "/events-and-presentations" in url_lower or "/investor-events" in url_lower:
         return True
     return False
 
@@ -185,14 +185,26 @@ async def _fetch_json(transport: Transport, url: str) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-async def discover_q4(
-    transport: Transport, source: Source, *, today: date
-) -> tuple[dict[str, str], list[date]]:
-    """Discover Q4 Inc upcoming/recent events and relevant press releases."""
-    host = urlsplit(source.calendar_url).hostname
-    if not host:
-        return {}, []
-    base = f"https://{host}"
+_NON_PREFIX_SEGMENTS = frozenset(
+    {
+        "events",
+        "events-and-presentations",
+        "investor-events",
+        "news",
+        "news-and-events",
+        "news-events",
+        "overview",
+        "financials",
+        "feed",
+        "default.aspx",
+    }
+)
+
+
+async def _discover_q4_at_base(
+    transport: Transport, host: str, base: str, *, today: date
+) -> tuple[dict[str, str], list[date], bool]:
+    """Probe Q4 Inc feeds rooted at `base`, returning (documents, historical, found_feed)."""
     documents: dict[str, str] = {}
     historical: set[date] = set()
 
@@ -246,7 +258,7 @@ async def discover_q4(
             probe_payload.get("GetEventListResult") if isinstance(probe_payload, dict) else None
         )
         if not isinstance(probe_items, list):
-            return {}, []
+            return {}, [], False
         for item in probe_items:
             if not isinstance(item, dict):
                 continue
@@ -328,4 +340,29 @@ async def discover_q4(
             else:
                 documents[detail_url] = doc_text
 
-    return documents, sorted(historical)
+    return documents, sorted(historical), True
+
+
+async def discover_q4(
+    transport: Transport, source: Source, *, today: date
+) -> tuple[dict[str, str], list[date]]:
+    """Discover Q4 Inc upcoming/recent events and relevant press releases."""
+    parsed = urlsplit(source.calendar_url)
+    host = parsed.hostname
+    if not host:
+        return {}, []
+    docs, historical, found = await _discover_q4_at_base(
+        transport, host, f"https://{host}", today=today
+    )
+    if found:
+        return docs, historical
+
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    if segments and segments[0].lower() not in _NON_PREFIX_SEGMENTS:
+        sub_base = f"https://{host}/{segments[0]}"
+        sub_docs, sub_hist, sub_found = await _discover_q4_at_base(
+            transport, host, sub_base, today=today
+        )
+        if sub_found:
+            return sub_docs, sub_hist
+    return {}, []

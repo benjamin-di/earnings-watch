@@ -189,12 +189,14 @@ async def test_oidc_zoneinfo_seeds_timezone_without_clobbering_and_emits_time_ta
         PersonalStore(settings.db, "bob").watch("ALPHA", "XNAS")
         res_cards = await client.get("/", cookies={auth.cookie: "b" * 43})
         assert res_cards.status_code == 200
-        assert 'data-local-time>' in res_cards.text
+        assert "data-local-time>" in res_cards.text
         assert res_cards.text.count("data-local-time") == 1
 
         # 2. Explicit non-UTC timezone is NOT clobbered by subsequent OIDC login
         prof = accounts.profile(settings.db, "bob")
-        accounts.preferences(settings.db, "bob", prof["revision"], prof["settings"], "Europe/Lisbon")
+        accounts.preferences(
+            settings.db, "bob", prof["revision"], prof["settings"], "Europe/Lisbon"
+        )
         res_bob2 = await client.get("/", cookies={auth.cookie: "b" * 43})
         assert res_bob2.status_code == 200
         assert accounts.profile(settings.db, "bob")["timezone"] == "Europe/Lisbon"

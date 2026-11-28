@@ -1,7 +1,10 @@
 from __future__ import annotations
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from datetime import date as Date
+import statistics
+from typing import Any
 from earnings_watch.model.limits import (
     COVERAGE_TOLERANCE_DAYS,
     DEGRADED_CONSECUTIVE_FAILURES,
@@ -12,6 +15,78 @@ from earnings_watch.model.events import Event, EventType, HealthEntry
 from earnings_watch.model.sources import PeriodScheme, Source
 
 _TRACKED = frozenset({EventType.EARNINGS, EventType.EARNINGS_CALL})
+_US_EXCHANGES = frozenset({"XNAS", "XNYS", "ARCX", "BATS"})
+_MIN_CONFIRMATION_DEADLINE_DAYS = 5
+_MAX_CONFIRMATION_DEADLINE_DAYS = 30
+_US_DEFAULT_DEADLINE_DAYS = 7
+_HKEX_DEFAULT_DEADLINE_DAYS = 9
+_OTHER_DEFAULT_DEADLINE_DAYS = 14
+
+
+def _parse_event_date(value: Any) -> date | None:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def confirmation_deadline_days(
+    source: Source, events: Sequence[Event | dict[str, Any]]
+) -> tuple[int, int | None]:
+    """Return (overdue_deadline_days, typical_lead_days) for an issuer's earnings confirmations.
+
+    Learns from observed confirmed/past earnings lead times (date - first_seen) when available,
+    falling back to market-regime priors (US 7d, HKEX 9d per Listing Rule 13.43, other 14d).
+    """
+    leads: list[int] = []
+    for ev in events:
+        if isinstance(ev, dict):
+            ev_type = str(ev.get("type") or "")
+            status = str(ev.get("status") or "")
+            evidence = str(ev.get("evidence") or "")
+            ev_date = _parse_event_date(ev.get("date"))
+            first_seen = _parse_event_date(ev.get("first_seen"))
+        else:
+            ev_type = str(ev.type)
+            status = str(ev.status)
+            evidence = ev.evidence or ""
+            ev_date = ev.date
+            first_seen = ev.first_seen
+        if ev_type != "earnings" or status not in {"ir-confirmed", "past"}:
+            continue
+        if "Estimated from issuer historical reporting cadence" in evidence:
+            continue
+        if ev_date is None or first_seen is None:
+            continue
+        lead = (ev_date - first_seen).days
+        if lead > 0:
+            leads.append(lead)
+
+    if leads:
+        typical = int(round(statistics.median(leads)))
+        deadline = max(
+            _MIN_CONFIRMATION_DEADLINE_DAYS,
+            min(_MAX_CONFIRMATION_DEADLINE_DAYS, min(leads) - 2),
+        )
+        return deadline, typical
+
+    if (
+        source.exchange in _US_EXCHANGES
+        or source.sec_cik is not None
+        or (source.isin or "").startswith("US")
+    ):
+        return _US_DEFAULT_DEADLINE_DAYS, None
+    if (
+        source.exchange == "XHKG"
+        or bool(source.hkex_stock_id)
+        or "hkexnews.hk" in (source.calendar_url or "").lower()
+    ):
+        return _HKEX_DEFAULT_DEADLINE_DAYS, None
+    return _OTHER_DEFAULT_DEADLINE_DAYS, None
 
 
 @dataclass(frozen=True)

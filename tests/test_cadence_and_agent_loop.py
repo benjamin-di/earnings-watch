@@ -399,7 +399,7 @@ def test_coverage_warnings_in_status_and_ui_rendering(settings):
     catalogue.put_source(source("emptyco", "EMPTY"))
     service.watch("EMPTY")
 
-    # 2. Source with expected earnings < 21d
+    # 2. Source with expected earnings past its adaptive confirmation deadline (<= 7d for US)
     catalogue.put_source(source("soonco", "SOON"))
     catalogue.commit_issuer(
         "soonco",
@@ -409,7 +409,7 @@ def test_coverage_warnings_in_status_and_ui_rendering(settings):
                 "SOON",
                 period="2026Q4",
                 id="earnings:soonco:2026Q4",
-                date=today + timedelta(days=10),
+                date=today + timedelta(days=5),
                 status=EventStatus.EXPECTED,
             )
         ],
