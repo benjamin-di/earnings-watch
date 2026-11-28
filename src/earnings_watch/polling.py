@@ -28,7 +28,16 @@ def due(event, state, now):
     return not previous or now - datetime.fromisoformat(previous) >= timedelta(seconds=interval)
 
 
-async def poll(catalogue, source, transport, *, dry_run=False, research=None, providers=None):
+async def poll(
+    catalogue,
+    source,
+    transport,
+    *,
+    dry_run=False,
+    research=None,
+    ir_harvest=None,
+    providers=None,
+):
     enabled = set(providers) if providers is not None else {"generic_ir", "sec_edgar", "hkexnews"}
     provider = release.adapter(source)
     official = {"sec": "sec_edgar", "hkex": "hkexnews", "page": "generic_ir"}[provider]
@@ -150,6 +159,24 @@ async def poll(catalogue, source, transport, *, dry_run=False, research=None, pr
                 found.extend(researched)
                 if any(doc.get("verified") and doc.get("role") == "release" for doc in researched):
                     state["researched_release"] = now.isoformat()
+            # Post-call IR asset harvest runs even when SEC/HKEX already set released_at,
+            # capturing presentations, official transcripts, and audio/webcast replays.
+            last_ir_harvest = state.get("last_ir_harvest_attempt")
+            ir_harvest_ready = (
+                offset >= 0
+                and state.get("ir_harvest_attempts", 0) < 3
+                and (
+                    not last_ir_harvest
+                    or now - datetime.fromisoformat(last_ir_harvest) >= RESEARCH_COOLDOWN
+                )
+            )
+            if ir_harvest is not None and "generic_ir" in enabled and ir_harvest_ready:
+                state["last_ir_harvest_attempt"] = now.isoformat()
+                state["ir_harvest_attempts"] = state.get("ir_harvest_attempts", 0) + 1
+                if not dry_run:
+                    catalogue.set_state("release_watch", event.id, state)
+                harvested = await ir_harvest(source, row)
+                count += len(harvested)
         finally:
             if not dry_run:
                 for doc in found:

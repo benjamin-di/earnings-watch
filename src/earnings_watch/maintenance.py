@@ -914,7 +914,21 @@ class Maintenance:
                             aborted = True
                             counts["sources"] += 1
                             break
+                    from .ir_harvest import harvest_ir_assets
                     from .polling import poll
+
+                    async def _ir_harvest_cb(src, ev_row):
+                        assets, _ = await harvest_ir_assets(
+                            self.catalogue,
+                            src,
+                            transport,
+                            runner=runner,
+                            browser=self.browser,
+                            event_id=str(ev_row.get("id") or "") or None,
+                            dry_run=dry_run,
+                            model=settings.model,
+                        )
+                        return assets
 
                     counts["documents"] += await poll(
                         self.catalogue,
@@ -922,6 +936,7 @@ class Maintenance:
                         transport,
                         dry_run=dry_run,
                         research=research_documents,
+                        ir_harvest=_ir_harvest_cb,
                         providers=providers,
                     )
                     counts["sources"] += 1

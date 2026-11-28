@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .model.sources import Source, period_consistent
-from .model.urls import public_url, same_apex
+from .model.urls import apex_domain, public_url, same_apex
 from .store.database import digest
 from .transport import Transport
 
@@ -45,7 +45,14 @@ def verify_link(
     evidence_url = link.get("evidence_url", source.results_url or source.calendar_url)
     hosts = {
         h.lower()
-        for u in (source.calendar_url, source.results_url, source.announcements_url)
+        for u in (
+            source.calendar_url,
+            source.results_url,
+            source.announcements_url,
+            source.presentations_url,
+            source.transcripts_url,
+            source.archive_url,
+        )
         if u and (h := urlsplit(u).hostname)
     }
     if capture_links is not None:
@@ -180,10 +187,18 @@ async def research(source, event, runner, *, model=None, sec_contact: str = ""):
         documents: list[Candidate] = Field(default_factory=list, max_length=20)
 
     hosts = {
-        urlsplit(u).hostname
-        for u in (source.calendar_url, source.results_url, source.announcements_url)
-        if u
+        h.lower()
+        for u in (
+            source.calendar_url,
+            source.results_url,
+            source.announcements_url,
+            source.presentations_url,
+            source.transcripts_url,
+            source.archive_url,
+        )
+        if u and (h := urlsplit(u).hostname)
     }
+    apex_domains = {a for h in hosts if (a := apex_domain(h))}
     with tempfile.TemporaryDirectory(prefix="earnings-research-") as directory:
         folder = Path(directory)
         config = folder / "scope.json"
@@ -192,6 +207,7 @@ async def research(source, event, runner, *, model=None, sec_contact: str = ""):
                 {
                     "directory": str(folder / "captures"),
                     "hosts": sorted(hosts),
+                    "apex_domains": sorted(apex_domains),
                     "sec_contact": sec_contact,
                 }
             )

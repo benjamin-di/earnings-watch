@@ -22,4 +22,6 @@ CREATE TABLE document_downloads (person TEXT NOT NULL REFERENCES people(id) ON D
 CREATE TABLE profiles (person TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE, label TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0, settings TEXT NOT NULL DEFAULT '{"results":true,"brief":false,"urgent":false,"hour":8}', feed_nonce TEXT NOT NULL DEFAULT '', feed_sha256 TEXT UNIQUE, seen_seq INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
 CREATE TABLE mutes (person TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, ticker TEXT NOT NULL, exchange TEXT NOT NULL DEFAULT '', PRIMARY KEY(person,ticker,exchange));
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-PRAGMA user_version=3;
+CREATE TABLE ir_assets (id TEXT PRIMARY KEY, source_key TEXT NOT NULL REFERENCES sources(key) ON DELETE CASCADE, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, url TEXT NOT NULL, category TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', published_date TEXT, period TEXT, evidence TEXT NOT NULL DEFAULT '', evidence_url TEXT NOT NULL DEFAULT '', first_seen TEXT NOT NULL, doc TEXT NOT NULL DEFAULT '{}', UNIQUE(source_key, url));
+CREATE INDEX ir_assets_source ON ir_assets(source_key);
+PRAGMA user_version=4;

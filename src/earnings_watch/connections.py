@@ -243,6 +243,28 @@ async def _library_targets_payload(settings, directory, *, schema_version: int =
             entry["category"] = _ROLE_TO_CATEGORY.get(role_val.strip().lower(), "other")
         docs_by_source.setdefault(source_key, []).append(entry)
 
+    ir_assets_by_source: dict[str, list[dict]] = {}
+    if schema_version == 2:
+        for asset in library.ir_assets():
+            skey = str(asset.get("source_key") or "")
+            if not skey:
+                continue
+            cat = str(asset.get("category") or "other")
+            ir_assets_by_source.setdefault(skey, []).append(
+                {
+                    "id": str(asset.get("id") or ""),
+                    "event_id": str(asset.get("event_id") or ""),
+                    "url": str(asset.get("url") or ""),
+                    "title": str(asset.get("title") or ""),
+                    "role": str(asset.get("role") or cat),
+                    "category": cat,
+                    "published_date": asset.get("published_date"),
+                    "period": asset.get("period"),
+                    "evidence_url": str(asset.get("evidence_url") or ""),
+                    "first_seen": str(asset.get("first_seen") or ""),
+                }
+            )
+
     active_source_keys: set[str] = set()
     scopes: list[dict] = []
     for person_row in await asyncio.to_thread(people, settings.db):
@@ -284,12 +306,13 @@ async def _library_targets_payload(settings, directory, *, schema_version: int =
                     "calendar": source.calendar_url,
                     "results": source.results_url,
                     "announcements": source.announcements_url,
-                    "presentations": None,
-                    "transcripts": None,
-                    "archive": None,
+                    "presentations": source.presentations_url,
+                    "transcripts": source.transcripts_url,
+                    "archive": source.archive_url,
                     "extra": [],
                 },
                 "verified_documents": docs_by_source.get(source.key, []),
+                "ir_assets": ir_assets_by_source.get(source.key, []),
             }
             for source_key in sorted(active_source_keys)
             for source in (sources_by_key[source_key],)

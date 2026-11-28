@@ -27,7 +27,7 @@ from earnings_watch.symbols import (
 )
 
 Row = dict[str, Any]
-SCHEMA = 3
+SCHEMA = 4
 MAX_PENDING_REGISTRATIONS = 100
 MAX_DAILY_REGISTRATIONS = 100
 
@@ -131,6 +131,13 @@ def _upgrade(path: Path) -> None:
             db.execute("INSERT INTO profiles(person,created_at) SELECT id,? FROM people", (now(),))
             db.execute("INSERT INTO metadata VALUES('database_id',?)", (secrets.token_hex(16),))
             db.execute("PRAGMA user_version=3")
+            version = 3
+        if version == 3:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS ir_assets (id TEXT PRIMARY KEY, source_key TEXT NOT NULL REFERENCES sources(key) ON DELETE CASCADE, event_id TEXT REFERENCES events(id) ON DELETE SET NULL, url TEXT NOT NULL, category TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', published_date TEXT, period TEXT, evidence TEXT NOT NULL DEFAULT '', evidence_url TEXT NOT NULL DEFAULT '', first_seen TEXT NOT NULL, doc TEXT NOT NULL DEFAULT '{}', UNIQUE(source_key, url))"
+            )
+            db.execute("CREATE INDEX IF NOT EXISTS ir_assets_source ON ir_assets(source_key)")
+            db.execute("PRAGMA user_version=4")
         elif version != SCHEMA:
             raise EarningsError("temporarily_unavailable", "unsupported database schema")
         db.commit()
@@ -196,6 +203,17 @@ class LibraryReader:
             return [
                 json.loads(row[0]) for row in db.execute("SELECT doc FROM documents ORDER BY id")
             ]
+
+    def ir_assets(self, source_key: str | None = None) -> list[Row]:
+        with connect(self.path) as db:
+            if source_key is not None:
+                rows = db.execute(
+                    "SELECT doc FROM ir_assets WHERE source_key=? ORDER BY first_seen DESC, id ASC",
+                    (source_key,),
+                )
+            else:
+                rows = db.execute("SELECT doc FROM ir_assets ORDER BY first_seen DESC, id ASC")
+            return [json.loads(row[0]) for row in rows]
 
     def changes(self, seq: int, limit: int) -> list[Row]:
         with connect(self.path) as db:
@@ -465,6 +483,52 @@ class Catalogue(LibraryReader):
             db.execute(
                 "INSERT INTO documents VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET sha256=excluded.sha256,doc=excluded.doc",
                 (doc["id"], doc["event_id"], doc["url"], doc.get("sha256", ""), encode(doc)),
+            )
+
+    def put_ir_asset(self, asset: Row) -> None:
+        with connect(self.path, write=True) as db:
+            existing = db.execute(
+                "SELECT doc FROM ir_assets WHERE source_key=? AND url=?",
+                (asset["source_key"], asset["url"]),
+            ).fetchone()
+            if existing:
+                prior = json.loads(existing[0])
+                asset = asset | {
+                    "id": prior["id"],
+                    "first_seen": prior["first_seen"],
+                }
+            first_seen = asset.get("first_seen") or now()
+            asset = asset | {"first_seen": first_seen}
+            db.execute(
+                """
+                INSERT INTO ir_assets(
+                    id, source_key, event_id, url, category, title,
+                    published_date, period, evidence, evidence_url, first_seen, doc
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(source_key, url) DO UPDATE SET
+                    event_id=COALESCE(excluded.event_id, ir_assets.event_id),
+                    category=excluded.category,
+                    title=excluded.title,
+                    published_date=COALESCE(excluded.published_date, ir_assets.published_date),
+                    period=COALESCE(excluded.period, ir_assets.period),
+                    evidence=excluded.evidence,
+                    evidence_url=excluded.evidence_url,
+                    doc=excluded.doc
+                """,
+                (
+                    asset["id"],
+                    asset["source_key"],
+                    asset.get("event_id"),
+                    asset["url"],
+                    asset["category"],
+                    asset.get("title", ""),
+                    asset.get("published_date"),
+                    asset.get("period"),
+                    asset.get("evidence", ""),
+                    asset.get("evidence_url", ""),
+                    first_seen,
+                    encode(asset),
+                ),
             )
 
     def record_download(self, person: str, doc: Row, path: Path, sha: str) -> None:

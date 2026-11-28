@@ -39,6 +39,11 @@ class Source(BaseModel):
     fy_end_month: int = Field(ge=1, le=12)
     results_url: str | None = None
     announcements_url: str | None = None
+    presentations_url: str | None = None
+    transcripts_url: str | None = None
+    archive_url: str | None = None
+    render_mode: str | None = None
+    ir_platform: str | None = None
     timing_url_prefixes: list[str] = Field(default_factory=list)
     calendar_timezone: str | None = None
     calendar_timezone_basis: str | None = None
@@ -54,10 +59,17 @@ class Source(BaseModel):
             self.calendar_url,
             self.results_url,
             self.announcements_url,
+            self.presentations_url,
+            self.transcripts_url,
+            self.archive_url,
             *self.timing_url_prefixes,
         ]:
             if url:
                 public_url(url)
+        if self.render_mode not in {None, "http", "browser"}:
+            raise ValueError("render_mode must be 'http', 'browser', or None")
+        if self.ir_platform not in {None, "q4", "generic"}:
+            raise ValueError("ir_platform must be 'q4', 'generic', or None")
         if bool(self.calendar_timezone) != bool(self.calendar_timezone_basis):
             raise ValueError("calendar timezone requires a documented basis")
         if self.calendar_timezone:
