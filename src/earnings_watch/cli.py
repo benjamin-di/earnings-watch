@@ -130,6 +130,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true")
     p.add_argument("--docs-only", action="store_true")
     p.add_argument("--search", default="")
+    p = sub.add_parser("harvest-ir")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--ticker", action="append")
     sub.add_parser("worker")
     p = sub.add_parser("serve")
     p.add_argument("--http", action="store_true")
@@ -322,6 +325,11 @@ def execute(args, settings):
                 search=set(filter(None, args.search.split(","))),
             )
         )
+    if command == "harvest-ir":
+        from .maintenance import Maintenance
+
+        only = {t.strip().upper() for t in (args.ticker or []) if t.strip()} or None
+        return asyncio.run(Maintenance(settings).harvest_ir(only=only, dry_run=args.dry_run))
     if command == "worker":
         from .worker import run
 

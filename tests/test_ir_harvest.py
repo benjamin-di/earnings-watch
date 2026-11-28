@@ -342,3 +342,56 @@ async def test_q4_ir_assets_discovers_presentations_and_events() -> None:
     assets = await discover_q4_ir_assets(transport, src, today=date(2026, 11, 20))
     cats = {a["category"] for a in assets}
     assert cats == {"presentation", "transcript", "audio_replay"}
+
+
+@pytest.mark.asyncio
+async def test_maintenance_harvest_ir_backfill_and_missing_table_tolerance(tmp_path: Path) -> None:
+    import sqlite3
+    from earnings_watch.maintenance import Maintenance
+    from earnings_watch.store.database import LibraryReader
+
+    db = tmp_path / "earnings.db"
+    initialize(db)
+    # Verify LibraryReader.ir_assets() tolerates legacy DBs without ir_assets table
+    with sqlite3.connect(db) as raw:
+        raw.execute("DROP TABLE ir_assets")
+    assert LibraryReader(db).ir_assets() == []
+
+    # Re-initialize and test Maintenance.harvest_ir()
+    initialize(db)
+    cat = Catalogue(db)
+    src = _source()
+    cat.put_source(src)
+    add_person(db, "alice")
+    PersonalStore(db, "alice").watch(src.ticker, src.exchange or "", origin="manual")
+
+    html = '<html><body><main><div>Q3 Deck <a href="https://cdn.example.net/99/q3.pdf">PDF</a></div></main></body></html>'
+    transport = Transport(
+        hosts={"investors.example.com"},
+        mock=httpx.MockTransport(
+            lambda _req: httpx.Response(200, text=html, headers={"content-type": "text/html"})
+        ),
+        resolver=lambda _h, _p, **_kw: [(2, 1, 6, "", ("93.184.216.34", 443))],
+        pace=0.0,
+    )
+    runner = _StubRunner(
+        {
+            "items": [
+                {
+                    "url": "https://cdn.example.net/99/q3.pdf",
+                    "category": "presentation",
+                    "title": "Q3 Deck",
+                    "published_date": "2026-11-05",
+                    "period": "2026Q3",
+                    "evidence": "Q3 Deck",
+                }
+            ]
+        }
+    )
+    settings = Settings(data_dir=tmp_path)
+    maint = Maintenance(settings, runner=runner, transport=transport)
+    res = await maint.harvest_ir()
+    assert res["sources"] == 1
+    assert res["assets"] == 1
+    assert res["calls"] == 1
+    assert len(LibraryReader(db).ir_assets()) == 1

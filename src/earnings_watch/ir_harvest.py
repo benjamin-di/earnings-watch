@@ -488,6 +488,8 @@ async def harvest_ir_assets(
     ):
         if raw and raw not in page_urls:
             page_urls.append(raw)
+    if not page_urls and source.calendar_url:
+        page_urls.append(source.calendar_url)
 
     new_seen: list[str] = []
     hosts = _source_hosts(source)

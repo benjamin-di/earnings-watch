@@ -838,6 +838,8 @@ class Maintenance:
                                         fetch_doc["ipo_date"] = ipo_date_str
                                     if ipo_checked_at:
                                         fetch_doc["ipo_checked_at"] = ipo_checked_at
+                                    if prev_state.get("ir_seen_urls"):
+                                        fetch_doc["ir_seen_urls"] = prev_state["ir_seen_urls"]
                                     self.catalogue.set_state("fetch_state", source.key, fetch_doc)
                                 if uncovered_rejected:
                                     errors.append(
@@ -906,6 +908,7 @@ class Maintenance:
                                 "layer1_hash",
                                 "ipo_date",
                                 "ipo_checked_at",
+                                "ir_seen_urls",
                             ):
                                 if prev_err_state.get(keep_key):
                                     err_doc[keep_key] = prev_err_state[keep_key]
@@ -939,6 +942,20 @@ class Maintenance:
                         ir_harvest=_ir_harvest_cb,
                         providers=providers,
                     )
+                    if not docs_only and "generic_ir" in providers:
+                        try:
+                            ir_found, _ = await harvest_ir_assets(
+                                self.catalogue,
+                                source,
+                                transport,
+                                runner=runner,
+                                browser=self.browser,
+                                dry_run=dry_run,
+                                model=settings.model,
+                            )
+                            counts["documents"] += len(ir_found)
+                        except Exception:
+                            pass
                     counts["sources"] += 1
                 except Exception as exc:
                     # Diagnostic classes are safe to expose; model and HTTP bodies are not.
@@ -1072,3 +1089,65 @@ class Maintenance:
         if changed and not dry_run:
             result["sweep"] = await self.sweep(force=True, search=changed, only=changed)
         return result
+
+    async def harvest_ir(
+        self, *, only: set[str] | None = None, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """Run 2-phase IR asset harvest (Q4 feeds + 1-shot delta classification) across active issuers."""
+        from .ir_harvest import harvest_ir_assets
+
+        settings = self.settings
+        with maintenance_lock(settings):
+            active = self.catalogue.active_keys()
+            sources = [
+                s
+                for s in self.catalogue.sources()
+                if s.key in active and (only is None or s.key in only or s.ticker.upper() in only)
+            ]
+            issuer_hosts = {
+                h.lower()
+                for s in sources
+                for u in (
+                    s.calendar_url,
+                    s.results_url,
+                    s.announcements_url,
+                    s.presentations_url,
+                    s.transcripts_url,
+                    s.archive_url,
+                )
+                if u
+                for h in (urlsplit(u).hostname,)
+                if h
+            }
+            apex_domains = {a for h in issuer_hosts if h and (a := apex_domain(h))}
+            transport = self.transport or Transport(
+                issuer_hosts,
+                state=self.catalogue,
+                sec_contact=settings.sec_contact,
+                cache_max_bytes=settings.cache_max_mb * 1024 * 1024,
+                apex_domains=apex_domains or None,
+            )
+            runner = BudgetRunner(self.runner, settings.max_calls_per_run)
+            total_assets = 0
+            errors: list[dict[str, str]] = []
+            for source in sources:
+                try:
+                    found, _ = await harvest_ir_assets(
+                        self.catalogue,
+                        source,
+                        transport,
+                        runner=runner,
+                        browser=self.browser,
+                        dry_run=dry_run,
+                        model=settings.model,
+                    )
+                    total_assets += len(found)
+                except Exception as exc:
+                    errors.append({"source": source.key, "reason": type(exc).__name__})
+            return {
+                "sources": len(sources),
+                "assets": total_assets,
+                "calls": runner.calls,
+                "errors": errors,
+                "dry_run": dry_run,
+            }

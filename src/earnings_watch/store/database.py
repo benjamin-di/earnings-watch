@@ -205,6 +205,10 @@ class LibraryReader:
 
     def ir_assets(self, source_key: str | None = None) -> list[Row]:
         with connect(self.path) as db:
+            if not db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ir_assets'"
+            ).fetchone():
+                return []
             if source_key is not None:
                 rows = db.execute(
                     "SELECT doc FROM ir_assets WHERE source_key=? ORDER BY first_seen DESC, id ASC",
