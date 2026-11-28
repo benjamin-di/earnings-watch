@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.14.1] - 2026-11-28
+
+### Fixed
+- Run 2-phase `harvest_ir_assets()` during daily `sweep()` (preserving `ir_seen_urls` across `fetch_state` updates so unchanged pages make 0 LLM calls) and add `earnings-watch harvest-ir` CLI backfill command.
+- Tolerate missing `ir_assets` table in `LibraryReader.ir_assets()` before `init` runs.
+
+### Upgrade
+- Action required: none.
+- Rollback: compatible with 0.14.0.
+
 ## [0.14.0] - 2026-11-28
 
 ### Added
