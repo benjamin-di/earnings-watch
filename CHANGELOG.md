@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.14.0] - 2026-11-28
+
+### Added
+- Persist typed IR subpage URLs (`presentations_url`, `transcripts_url`, `archive_url`), `render_mode`, and `ir_platform` on `Source`.
+- Add additive `ir_assets` SQLite table (idempotently created on schema v3) for non-event IR presentations, transcripts, audio replays, and webcast links.
+- Add 2-phase IR asset harvester (`ir_harvest.py`) with chrome-stripping Link-Manifest delta diffing, Q4 `Presentation.svc` / `Event.svc` feeds, and 1-shot structured JSON classification.
+- Decouple post-call IR asset harvesting from `released_at` in `polling.py` and pass `apex_domains` in `documents.py`.
+- Emit `ir_urls.{presentations,transcripts,archive}` and `ir_assets` in `/internal/library-targets?schema=2` (v1 remains backward compatible).
+
+### Upgrade
+- Action required: none; `ir_assets` table is created automatically on startup.
+- Rollback: compatible with 0.13.0.
+
 ## [0.13.0] - 2026-11-28
 
 ### Added
