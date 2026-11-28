@@ -1160,7 +1160,15 @@ input[type="radio"] {
 .inline-form,
 .hub-inline-form {
   display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
   margin: 0;
+}
+
+.hub-inline-form select {
+  width: auto;
+  min-width: 11rem;
 }
 
 .cards-grid {

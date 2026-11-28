@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.13.0] - 2026-11-28
+
+### Added
+
+- Seed `people.timezone` from Pocket ID's OIDC `zoneinfo` claim on first login or while still on default `UTC` without overwriting explicit user preferences or failing on invalid values.
+- Render exact-time event cards with `<time datetime="..." data-local-time>` and progressively format times and the Upcoming timezone label in the browser's local timezone.
+
+### Fixed
+
+- Remove the cramped inline timezone dropdown/Save form on Upcoming when `digests_tab = false`, replacing it with a clean single-line summary (`Next 90 days · <timezone> · Manage email digests & alerts in Briefs`).
+- Fix `.hub-inline-form` alignment, spacing, wrapping, and `<select>` width in `app.css`.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with `0.12.0`; no schema change.
+
 ## [0.12.0] - 2026-11-28
 
 ### Added

@@ -186,4 +186,33 @@
     if (submitBtn) submitBtn.disabled = true;
     submitQueue = submitQueue.then(() => runAsyncSubmit(form, submitBtn, mode));
   });
+
+  // Format exact-time event cards and timezone label in the browser's local timezone.
+  try {
+    const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (browserTz) {
+      for (const el of document.querySelectorAll("[data-local-tz]")) {
+        el.textContent = browserTz;
+      }
+      const fmt = new Intl.DateTimeFormat("en-GB", {
+        weekday: "short",
+        day: "2-digit",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: browserTz,
+      });
+      for (const el of document.querySelectorAll("time[data-local-time][datetime]")) {
+        const dt = new Date(el.getAttribute("datetime") || "");
+        if (Number.isNaN(dt.getTime())) continue;
+        const parts = Object.fromEntries(fmt.formatToParts(dt).map((p) => [p.type, p.value]));
+        if (parts.weekday && parts.day && parts.month && parts.hour && parts.minute) {
+          el.textContent = `${parts.weekday} ${parts.day} ${parts.month}, ${parts.hour}:${parts.minute} ${browserTz}`;
+        }
+      }
+    }
+  } catch (_) {
+    // Keep server-rendered fallback times if Intl is unavailable.
+  }
 })();

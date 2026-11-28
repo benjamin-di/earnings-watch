@@ -394,7 +394,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 state_dir=settings.data_dir / "browser",
                 required_group=settings.oidc_required_group,
                 cookie_name="__Host-earnings",
-                claim_names=("person_id", "email", "email_verified"),
+                claim_names=("person_id", "email", "email_verified", "zoneinfo"),
             ),
             home="/",
             **renderer_options(BrowserAuth),
@@ -425,6 +425,9 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
         accounts.provision(
             settings.db, subject, who.get("claims", {}).get("person_id", "") or who.get("name", "")
         )
+        zoneinfo = who.get("claims", {}).get("zoneinfo", "")
+        if isinstance(zoneinfo, str) and zoneinfo.strip():
+            accounts.seed_timezone(settings.db, subject, zoneinfo)
         if not directory and info.get("email"):
             accounts.remember_email(settings.db, subject, info["email"])
         return subject, info
@@ -490,6 +493,29 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             if safe_source_url
             else ""
         )
+        when_iso = ""
+        if (
+            event_row.get("date")
+            and event_row.get("release_time")
+            and event_row.get("release_tz")
+            and not event_row.get("timing_issue")
+            and "(tentative)" not in str(event_row.get("when") or "")
+            and "(month estimate)" not in str(event_row.get("when") or "")
+        ):
+            try:
+                when_iso = (
+                    datetime.fromisoformat(f"{event_row['date']}T{event_row['release_time']}")
+                    .replace(tzinfo=ZoneInfo(str(event_row["release_tz"])))
+                    .isoformat()
+                )
+            except (ValueError, ZoneInfoNotFoundError):
+                when_iso = ""
+        when_html = (
+            f'<time datetime="{html.escape(when_iso, quote=True)}" data-local-time>'
+            f"{html.escape(event_row['when'])}</time>"
+            if when_iso
+            else f"<span>{html.escape(event_row['when'])}</span>"
+        )
         return (
             '<li class="event-card"><div class="event-main">'
             '<div class="event-head">'
@@ -498,7 +524,7 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
             f"{changed_html}"
             "</div>"
             '<div class="event-meta">'
-            f"<span>{html.escape(event_row['when'])}</span>"
+            f"{when_html}"
             f"{_certainty_badge(event_row)}"
             f"{origin_badges}"
             "</div></div>"
@@ -578,15 +604,9 @@ def create_app(settings, mode="gateway", *, auth=None, directory=None):
                 else ""
             )
             parts.append(
-                '<form class="hub-inline-form muted small" method="post" action="/connections/preferences" data-async="reload">'
-                + form_fields(profile, view="upcoming")
-                + '<input type="hidden" name="section" value="timezone">'
-                + "<span>Next 90 days · Timezone: </span>"
-                + _render_timezone_select(profile["timezone"])
-                + " "
-                + button("Save", cls="button secondary btn-sm")
-                + ext_link
-                + "</form>"
+                '<p class="muted small">Next 90 days · '
+                f'<span data-local-tz>{html.escape(profile["timezone"])}</span>'
+                f"{ext_link}</p>"
             )
 
         group_defs = [

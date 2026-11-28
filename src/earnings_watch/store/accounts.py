@@ -95,6 +95,23 @@ def provision(path: Path, subject: str, label: str = "") -> str:
     return subject
 
 
+def seed_timezone(path: Path, person: str, tz: str) -> bool:
+    """Seed a person's timezone from an OIDC claim only when still unset or default UTC."""
+    clean = (tz or "").strip()
+    if not clean:
+        return False
+    try:
+        ZoneInfo(clean)
+    except (ValueError, ZoneInfoNotFoundError):
+        return False
+    with connect(path, write=True) as db:
+        changed = db.execute(
+            "UPDATE people SET timezone=? WHERE id=? AND (timezone IS NULL OR timezone='' OR timezone='UTC')",
+            (clean, person),
+        )
+    return changed.rowcount > 0
+
+
 def profile(path: Path, person: str) -> dict:
     with connect(path) as db:
         row = db.execute(
