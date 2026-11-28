@@ -128,7 +128,7 @@ async def test_resolve_sec_identity_clears_ipo_when_reporting_history_exists_and
         ticker="SYNT",
         name="London Example Bank",
         exchange="XLON",
-        calendar_url="https://ir.london.example.co.uk/events",
+        calendar_url="https://ir.london.example.com/events",
         fetch=FetchStrategy.PLAIN,
         period_scheme=PeriodScheme.HALF_YEAR,
         fy_end_month=12,

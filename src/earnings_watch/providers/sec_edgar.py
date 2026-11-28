@@ -23,21 +23,7 @@ _ROUTINE_6K_RE = re.compile(
     re.I,
 )
 _US_EXCHANGES = frozenset({"XNAS", "XNYS", "ARCX", "BATS"})
-_NON_US_HOST_SUFFIXES = (
-    "hkexnews.hk",
-    "asx.com.au",
-    ".co.uk",
-    ".de",
-    ".fr",
-    ".it",
-    ".pt",
-    ".gr",
-    ".at",
-    ".kr",
-    ".jp",
-    ".au",
-    ".hk",
-)
+_NON_US_TLDS = frozenset({"uk", "de", "fr", "it", "pt", "gr", "at", "kr", "jp", "au", "hk"})
 _NAME_STOPWORDS = frozenset(
     {
         "inc",
@@ -85,7 +71,7 @@ def _is_us_sec_eligible(source: Source) -> bool:
     if source.exchange is not None or source.hkex_stock_id:
         return False
     host = (urlsplit(source.calendar_url).hostname or "").lower()
-    if any(host.endswith(suffix) for suffix in _NON_US_HOST_SUFFIXES):
+    if "." in host and host.rsplit(".", 1)[-1] in _NON_US_TLDS:
         return False
     return True
 
